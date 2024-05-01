@@ -1,0 +1,111 @@
+{
+  "nodes": {
+    "flake-utils": {
+      "inputs": {
+        "systems": "systems"
+      },
+      "locked": {
+        "lastModified": 1705309234,
+        "narHash": "sha256-uNRRNRKmJyCRC/8y1RqBkqWBLM034y4qN7EprSdmgyA=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "1ef2e671c3b0c19053962c07dbda38332dcebf26",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "janus": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "libgccjit-hs": "libgccjit-hs",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1714007475,
+        "narHash": "sha256-7Smg9QMzDPYYx0kylHDCHhk8OAgVQxaKqQ5st6FNb4k=",
+        "ref": "refs/heads/master",
+        "rev": "c8705f88c6e8d4353886da3cab84d4ef27320c3a",
+        "revCount": 66,
+        "type": "git",
+        "url": "ssh://git@github.com:/ajknapp/janus.git"
+      },
+      "original": {
+        "type": "git",
+        "url": "ssh://git@github.com:/ajknapp/janus.git"
+      }
+    },
+    "libgccjit-hs": {
+      "inputs": {
+        "flake-utils": [
+          "janus",
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "janus",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1704777348,
+        "narHash": "sha256-BQSBHCO1FOt83977dcptD5MrfVOsYXPveo03s6rvXeo=",
+        "ref": "refs/heads/master",
+        "rev": "4cbda4c51074f78e922db9e00e4cd19f71bfe7fc",
+        "revCount": 27,
+        "type": "git",
+        "url": "ssh://git@github.com:/ajknapp/libgccjit-hs.git"
+      },
+      "original": {
+        "type": "git",
+        "url": "ssh://git@github.com:/ajknapp/libgccjit-hs.git"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1705331948,
+        "narHash": "sha256-qjQXfvrAT1/RKDFAMdl8Hw3m4tLVvMCc8fMqzJv0pP4=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "b8dd8be3c790215716e7c12b247f45ca525867e2",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-23.11",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "flake-utils": "flake-utils",
+        "janus": "janus",
+        "nixpkgs": "nixpkgs"
+      }
+    },
+    "systems": {
+      "locked": {
+        "lastModified": 1681028828,
+        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
+        "owner": "nix-systems",
+        "repo": "default",
+        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
