@@ -2,7 +2,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -46,8 +45,15 @@ import Janus.Expression.Ord
 import Linear
 import Prelude hiding (id, (.))
 
-data Dual a = Dual {primal, dual :: a}
-  deriving (Eq, Ord, Show, Generic, Functor, Foldable, Traversable)
+data Primal e a b where
+  PrimalV :: e (Ptr a) -> Primal e a (Var e a)
+  PrimalT :: Tensor ds e a -> Primal e a (Tensor ds e a)
+
+data Dual a where
+  DVar :: Var e a -> Dual (Var e a)
+  DTBroadcast :: Dual (Var e a) -> Dual (Tensor sh e a)
+  DTConst :: Tensor sh e a -> Dual (Tensor sh e a)
+  DTensor :: Tensor sh e a -> Tensor sh e a -> Dual (Tensor sh e a)
 
 data Tape e a = Tape {tapePrimal, tapeDual :: e (Ptr a)}
 
@@ -58,7 +64,7 @@ newtype RAD m e c a b = RAD
     (Category, Arrow, ArrowChoice)
     via StaticMonadArrow (State Int) (Kleisli (ReaderT (Tape e c) (Codensity m)))
 
-instance (CmdRAD m e a) => ArrowNum (RAD m e a) (DVar e a) where
+instance (CmdRAD m e a) => ArrowNum (RAD m e a) (Dual (Var e a)) where
   addA = op2 (\x y -> (x + y, \dz -> (dz, dz)))
   subA = op2 (\x y -> (x - y, \dz -> (dz, negate dz)))
   mulA = op2 (\x y -> (x * y, \dwdz -> (dwdz * y, dwdz * x)))
@@ -66,11 +72,11 @@ instance (CmdRAD m e a) => ArrowNum (RAD m e a) (DVar e a) where
   absA = op1 (\x -> (abs x, signum))
   signumA = op1 (\x -> (signum x, const 0))
 
-instance (CmdRAD m e a, Fractional (e a)) => ArrowFractional (RAD m e a) (DVar e a) where
+instance (CmdRAD m e a, Fractional (e a)) => ArrowFractional (RAD m e a) (Dual (Var e a)) where
   divA = op2 (\x y -> (x / y, \dwdz -> (dwdz / y, dwdz * x / (y * y))))
   recipA = op1 (\x -> (recip x, negate . (* recip (x * x))))
 
-instance (CmdRAD m e a, Floating (e a)) => ArrowFloating (RAD m e a) (DVar e a) where
+instance (CmdRAD m e a, Floating (e a)) => ArrowFloating (RAD m e a) (Dual (Var e a)) where
   expA = op1 (\x -> let y = let_ (exp x) id in (y, (* y)))
   logA = op1 (\x -> (log x, (/ x)))
   sqrtA = op1 (\x -> let y = let_ (sqrt x) id in (y, (/ (2 * y))))
@@ -110,24 +116,16 @@ type CmdRAD m e a =
 adSize :: RAD m e c a b -> Int
 adSize (RAD f) = execState f 0
 
-newtype Var e a = Var {getVar :: e (Ptr a)}
-
-peekVar :: CmdStorable m e a => Var e a -> m (e a)
-peekVar = peek . getVar
-
-pokeVar :: CmdStorable m e a => Var e a -> e a -> m ()
-pokeVar (Var x) = poke x
-
-data DVar e a where
-  DVar :: Var e a -> Var e a -> DVar e a
-  DVConst :: e a -> DVar e a
-  DVConst' :: Var e a -> DVar e a
+data Var e a where
+  VConst :: e a -> Var e a
+  VConst' :: e (Ptr a) -> Var e a
+  VDyn :: e (Ptr a) -> e (Ptr a) -> Var e a
 
 op1 ::
   forall m e a.
   (CmdRAD m e a) =>
   (e a -> (e a, e a -> e a)) ->
-  RAD m e a (DVar e a) (DVar e a)
+  RAD m e a (Dual (Var e a)) (Dual (Var e a))
 op1 f =
   arr Identity
     >>> opN (\(Identity x) -> let (g, dg) = f x in (g, Identity . dg))
@@ -136,7 +134,7 @@ op2 ::
   forall m e a.
   (CmdRAD m e a) =>
   (e a -> e a -> (e a, e a -> (e a, e a))) ->
-  RAD m e a (DVar e a, DVar e a) (DVar e a)
+  RAD m e a (Dual (Var e a), Dual (Var e a)) (Dual (Var e a))
 op2 f =
   arr (uncurry V2)
     >>> opN
@@ -149,7 +147,7 @@ op3 ::
   forall m e a.
   (CmdRAD m e a) =>
   (e a -> e a -> e a -> (e a, e a -> (e a, e a, e a))) ->
-  RAD m e a (DVar e a, DVar e a, DVar e a) (DVar e a)
+  RAD m e a (Dual (Var e a), Dual (Var e a), Dual (Var e a)) (Dual (Var e a))
 op3 f =
   arr (\(x, y, z) -> V3 x y z)
     >>> opN
@@ -163,26 +161,26 @@ opN ::
   forall m e a f.
   (CmdRAD m e a, Traversable f, Applicative f) =>
   (f (e a) -> (e a, e a -> f (e a))) ->
-  RAD m e a (f (DVar e a)) (DVar e a)
+  RAD m e a (f (Dual (Var e a))) (Dual (Var e a))
 opN f = RAD $ do
   idx <- get
   put (idx + 1)
   pure $ Kleisli $ \xs -> do
     xs' <- for xs $ \case
-      DVar (Var xi) _ -> lift . lift $ peek xi
-      DVConst a -> pure a
-      DVConst' (Var a) -> lift $ lift $ peek a
+      DVar (VConst a) -> pure a
+      DVar (VConst' a) -> lift . lift $ peek a
+      DVar (VDyn xi _) -> lift . lift $ peek xi
     let (z', dzdx) = f xs'
     (z, dz) <- destination idx
     lift $ shift $ \k -> lift $ do
-      pokeVar z z'
-      w <- k (DVar z dz)
-      dz' <- peekVar dz
+      poke z z'
+      w <- k (DVar (VDyn z dz))
+      dz' <- peek dz
       let dxdzs = dzdx dz'
       for_ ((,) <$> xs <*> dxdzs) $ \(xi, dxidz) -> case xi of
-        DVar _ dxi -> do
-          dxi' <- peekVar dxi
-          pokeVar dxi $ dxi' + dxidz
+        DVar (VDyn _ dxi) -> do
+          dxi' <- peek dxi
+          poke dxi $ dxi' + dxidz
         _ -> pure ()
       pure w
 
@@ -192,7 +190,7 @@ opNMap ::
   (CmdRAD m e a, Traversable f, Applicative f, KnownNat n) =>
   (f (e a) -> e a) ->
   (f (e a) -> f (e a)) ->
-  RAD m e a (f (DVector n e a)) (DVector n e a)
+  RAD m e a (f (Dual (Vector n e a))) (Dual (Vector n e a))
 opNMap f df = RAD $ do
   let n = natVal (Proxy @n)
   idx <- get
@@ -213,11 +211,11 @@ opNMap f df = RAD $ do
             dxi' <- readTensor dxi (i :. Z)
             writeTensor dxi (i :. Z) (dxi' + dxidyi' * dyi')
           DTBroadcast xi -> case xi of
-            DVar _ dxi -> do
-              dxi' <- peekVar dxi
-              pokeVar dxi (dxi' + dxidyi' * dyi')
-            DVConst _ -> pure ()
-            DVConst' _ -> pure ()
+            DVar (VConst _) -> pure ()
+            DVar (VConst' _) -> pure ()
+            DVar (VDyn _ dxi) -> do
+              dxi' <- peek dxi
+              poke dxi (dxi' + dxidyi' * dyi')
           DTConst _ -> pure ()
       pure ans
 
@@ -227,7 +225,7 @@ opNMapSum ::
   (CmdRAD m e a, Traversable f, Applicative f, KnownNat n) =>
   (f (e a) -> e a) ->
   (f (e a) -> f (e a)) ->
-  RAD m e a (f (DVector n e a)) (DVar e a)
+  RAD m e a (f (Dual (Vector n e a))) (Dual (Var e a))
 opNMapSum f df = RAD $ do
   let n = natVal (Proxy @n)
   idx <- get
@@ -235,55 +233,52 @@ opNMapSum f df = RAD $ do
   pure $ Kleisli $ \xs -> do
     (y, dy) <- destination idx
     lift $ shift $ \k -> lift $ do
-      poke (getVar y) 0
+      poke y 0
       rangeM 0 (fromIntegral n) $ \i -> do
         xs' <- for xs $ \xi -> readDTensorPrimal xi (i :. Z)
-        y' <- peekVar y
-        pokeVar y (y' + f xs')
-      ans <- k (DVar y dy)
+        y' <- peek y
+        poke y (y' + f xs')
+      ans <- k (DVar (VDyn y dy))
       rangeM 0 (fromIntegral n) $ \i -> do
         xs' <- for xs $ \xi -> readDTensorPrimal xi (i :. Z)
-        dyi' <- peekVar dy
+        dyi' <- peek dy
         let dxdy' = df xs'
         for_ ((,) <$> xs <*> dxdy') $ \(dxi_, dxidyi') -> case dxi_ of
           DTensor _ dxi -> do
             dxi' <- readTensor dxi (i :. Z)
             writeTensor dxi (i :. Z) (dxi' + dxidyi' * dyi')
           DTBroadcast xi_ -> case xi_ of
-            DVar _ dxi -> do
-              dxi' <- peekVar dxi
-              pokeVar dxi (dxi' + dxidyi' * dyi')
-            DVConst _ -> pure ()
-            DVConst' _ -> pure ()
+            DVar (VConst _) -> pure ()
+            DVar (VConst' _) -> pure ()
+            DVar (VDyn _ dxi) -> do
+              dxi' <- peek dxi
+              poke dxi (dxi' + dxidyi' * dyi')
           DTConst _ -> pure ()
       pure ans
 
-readDTensorPrimal :: (Applicative m, CmdStorable m e a, Num (e Int64)) => DTensor d e a -> TensorIndex d e -> m (e a)
+readDTensorPrimal :: (Applicative m, CmdStorable m e a, Num (e Int64)) => Dual (Tensor d e a) -> TensorIndex d e -> m (e a)
 readDTensorPrimal (DTensor x _) idx = readTensor x idx
-readDTensorPrimal (DTBroadcast (DVar (Var x) _)) _ = peek x
-readDTensorPrimal (DTBroadcast (DVConst x)) _ = pure x
-readDTensorPrimal (DTBroadcast (DVConst' (Var x))) _ = peek x
+readDTensorPrimal (DTBroadcast (DVar (VConst x))) _ = pure x
+readDTensorPrimal (DTBroadcast (DVar (VConst' x))) _ = peek x
+readDTensorPrimal (DTBroadcast (DVar (VDyn x _))) _ = peek x
 readDTensorPrimal (DTConst x) idx = readTensor x idx
 
-destination :: forall m e a. (ExpPtr e a, Num (e Int64), ExpSized e a) => Int -> ReaderT (Tape e a) (Codensity m) (Var e a, Var e a)
+destination :: forall m e a. (ExpPtr e a, Num (e Int64), ExpSized e a) => Int -> ReaderT (Tape e a) (Codensity m) (e (Ptr a), e (Ptr a))
 destination idx = do
   Tape t dt <- ask
   let inc = flip ptrAdd (fromIntegral idx * sizeOf (Proxy @a))
-  pure (Var $ inc t, Var $ inc dt)
+  pure (inc t, inc dt)
 
 destinationVector :: forall m e a n. (ExpPtr e a, Num (e Int64), ExpSized e a, KnownNat n) => Int -> ReaderT (Tape e a) (Codensity m) (Vector n e a, Vector n e a)
 destinationVector idx = do
   let bds = TensorBoundCons (Proxy @n) TensorBoundNil
-  (Var t, Var dt) <- destination idx
+  (t, dt) <- destination idx
   pure (Tensor bds t, Tensor bds dt)
 
-auto :: e a -> DVar e a
-auto = DVConst
+auto :: e a -> Dual (Var e a)
+auto = DVar . VConst
 
-data DTensor sh e a where
-  DTBroadcast :: DVar e a -> DTensor sh e a
-  DTConst :: Tensor sh e a -> DTensor sh e a
-  DTensor :: Tensor sh e a -> Tensor sh e a -> DTensor sh e a
+type DTensor sh e a = Dual (Tensor sh e a)
 
 type DVector n e a = DTensor '[n] e a
 
@@ -292,7 +287,7 @@ type DMatrix n m e a = DTensor '[n, m] e a
 autoT :: Tensor sh e a -> DTensor sh e a
 autoT = DTConst
 
-dotA :: forall m e a n. (CmdRAD m e a, KnownNat n) => RAD m e a (DVector n e a, DVector n e a) (DVar e a)
+dotA :: forall m e a n. (CmdRAD m e a, KnownNat n) => RAD m e a (DVector n e a, DVector n e a) (Dual (Var e a))
 dotA = arr (uncurry V2) >>> opNMapSum (\(V2 x y) -> x * y) (\(V2 x y) -> V2 y x)
 
 class Flat a where
@@ -303,8 +298,8 @@ class Flat a where
 instance Flat (Var e a) where
   flatSize _ = 1
 
-instance (Flat a) => Flat (Primal a) where
-  flatSize _ = flatSize (Proxy @a)
+instance (Flat b) => Flat (Primal e a b) where
+  flatSize _ = flatSize (Proxy @b)
 
 instance Flat (Tensor '[] e a) where
   flatSize _ = 1
@@ -335,11 +330,11 @@ withGrad ::
     Tangential f e a,
     FZip (f e a)
   ) =>
-  RAD m e a (f e a Dual) (DVar e a) ->
-  (Tape e a -> m (e a, f e a Primal) -> m ()) ->
+  RAD m e a (f e a Dual) (Dual (Var e a)) ->
+  (Tape e a -> m (e a, f e a (Primal e a)) -> m ()) ->
   m ()
 withGrad (RAD f) k = do
-  let m = flatSize (Proxy @(f e a Primal))
+  let m = flatSize (Proxy @(f e a (Primal e a)))
       (f'', n) = runState f m
   tape <- ptrCast <$> malloc ((fromIntegral n :: e Int64) * sizeOf (Proxy @a))
   dtape <- ptrCast <$> malloc ((fromIntegral n :: e Int64) * sizeOf (Proxy @a))
@@ -348,23 +343,19 @@ withGrad (RAD f) k = do
     rangeM 0 (fromIntegral n) $ \i -> pokeElemOff dtape 0 i
     z <- lowerCodensity $ reset $ do
       runReaderT (runKleisli f'' $ unpackTangent tape dtape) tape' >>= \case
-        DVar z dz -> do
-          z' <- lift $ peekVar z
-          lift $ pokeVar dz 1
+        DVar (VConst e) -> pure e
+        DVar (VConst' e) -> lift $ peek e
+        DVar (VDyn z dz) -> do
+          z' <- lift $ peek z
+          lift $ poke dz 1
           pure z'
-        DVConst a -> pure a
-        DVConst' (Var a) -> lift $ peek a
     pure (z, unpack dtape)
   free (ptrCast tape)
   free (ptrCast dtape)
   pure ()
 
-data Primal a where
-  PrimalV :: Var e a -> Primal (Var e a)
-  PrimalT :: Tensor ds e a -> Primal (Tensor ds e a)
-
-class (Flat (f e a Primal)) => Tangential f e a where
-  unpack :: e (Ptr a) -> f e a Primal
+class (Flat (f e a (Primal e a))) => Tangential f e a where
+  unpack :: e (Ptr a) -> f e a (Primal e a)
 
 unpackTangent ::
   (FZip (f e a), Tangential f e a) =>
@@ -374,11 +365,19 @@ unpackTangent ::
 unpackTangent tape dtape =
   fzipWith
     ( \x y -> case (x, y) of
-        (PrimalV x', PrimalV y') -> Dual x' y'
-        (PrimalT x', PrimalT y') -> Dual x' y'
+        (PrimalV x', PrimalV y') -> DVar (VDyn x' y')
+        (PrimalT x', PrimalT y') -> DTensor x' y'
     )
     (unpack tape)
     (unpack dtape)
+
+dconst :: (FFunctor (f e a)) => f e a (Primal e a) -> f e a Dual
+dconst =
+  ffmap
+    ( \case
+        PrimalV e -> DVar (VConst' e)
+        PrimalT t -> DTConst t
+    )
 
 --------------------------------------------------------------------------------
 
@@ -395,14 +394,14 @@ instance FZip (DingoDango e a) where fzipWith = gfzipWith
 
 instance FRepeat (DingoDango e a) where frepeat = gfrepeat
 
-instance Flat (DingoDango e a Primal)
+instance Flat (DingoDango e a (Primal e a))
 
 instance (ExpSized e a, ExpPtr e a) => Tangential DingoDango e a where
-  unpack tape = DingoDango (PrimalV $ Var tape) (PrimalT $ Tensor (TensorBoundCons Proxy TensorBoundNil) (tape `ptrAdd` sizeOf (Proxy @a)))
+  unpack tape = DingoDango (PrimalV tape) (PrimalT $ Tensor (TensorBoundCons Proxy TensorBoundNil) (tape `ptrAdd` sizeOf (Proxy @a)))
 
 foo :: IO ()
 foo = do
-  withGrad (arr (\x -> Identity $ DTensor (primal $ f2 x) (dual $ f2 x)) >>> opNMapSum (\(Identity z) -> let_ (sin z) $ \y -> y * y) (\z -> 2 * sin z * cos z)) $ \tape grad -> do
+  withGrad (arr (Identity . f2) >>> opNMapSum (\(Identity z) -> let_ (sin z) $ \y -> y * y) (\z -> 2 * sin z * cos z)) $ \tape grad -> do
     rangeM (0 :: Identity Int) 3 $ \_ -> do
       let Tape tape' _ = tape
       pokeElemOff tape' 0 0
@@ -412,6 +411,6 @@ foo = do
       pokeElemOff tape' 4 4
       pokeElemOff tape' 5 5
       pokeElemOff tape' 8 6
-      (lp, dlp) <- grad :: IO (Identity Double, DingoDango Identity Double Primal)
+      (lp, dlp) <- grad :: IO (Identity Double, DingoDango Identity Double (Primal Identity Double))
       format lp
       rangeM 0 6 $ readTensor ((\(PrimalT x) -> x) $ f2 dlp) . (:. Z) >=> format
