@@ -221,7 +221,37 @@ updateMomentum g u eps n = do
     pokeElemOff u (uk / norm'') k
   letM $ delta - log 2 + log (1 + ue + (1 - ue) * zeta * zeta)
 
-data Foo e a f = Foo {_foo1, _foo2 :: f (Var e a)}
+minimalNormStep ::
+  ( CmdRef m e a,
+    CmdRef m e Int64,
+    CmdWhile m e,
+    ExpOrd e Int64,
+    CmdStorable m e a,
+    Floating (e a),
+    Num (e Int64)
+  ) =>
+  e (Ptr a) ->
+  e (Ptr a) ->
+  e (Ptr a) ->
+  Int ->
+  m (e a, f (Primal e a)) ->
+  e a ->
+  m ()
+minimalNormStep tape dtape mom n grad eps = do
+  let lambda_c = 0.1931833275037836
+  halfeps <- letM $ 0.5 * eps
+  epslam <- letM $ lambda_c * eps
+  rho <- letM $ eps * (1 - 2 * lambda_c)
+  _ <- updateMomentum dtape mom epslam n
+  updatePosition tape mom halfeps n
+  _ <- grad
+  _ <- updateMomentum dtape mom rho n
+  updatePosition tape mom halfeps n
+  _ <- grad
+  _ <- updateMomentum dtape mom epslam n
+  pure ()
+
+data Foo e a f = Foo {_fooA, _fooB :: f (Var e a)}
   deriving (Generic)
 
 deriving instance (Show (f (Var e a))) => Show (Foo e a f)
@@ -406,16 +436,11 @@ data FieldName e a where
   FieldVar :: String -> FieldName e (Var e a)
   FieldTensor :: String -> TensorBound sh e -> FieldName e (Tensor sh e a)
 
-deriving instance Show (TensorBound e a)
-
 deriving instance Show (FieldName e a)
 
 fieldName :: FieldName e a -> String
 fieldName (FieldVar s) = s
 fieldName (FieldTensor s _) = s
-
-fieldNames' :: Foo e a (FieldName e)
-fieldNames' = Foo (FieldVar "mu1") (FieldVar "mu2")
 
 class GFieldNames f where
   gfieldNames :: String -> Proxy (f a) -> f a
@@ -459,7 +484,7 @@ instance (KnownSymbol n, GFieldNames f) => GFieldNames (S1 ('MetaSel ('Just n) u
 class FieldNames e f where
   fieldNames :: f (FieldName e)
   default fieldNames :: (Generic (f (FieldName e)), GFieldNames (Rep (f (FieldName e)))) => f (FieldName e)
-  fieldNames = GHC.Generics.to $ gfieldNames "" (Proxy @(Rep (f (FieldName e)) (FieldName e ())))
+  fieldNames = GHC.Generics.to $ gfieldNames "" (Proxy @(Rep (f (FieldName e)) ()))
 
 instance FieldNames e (Foo e a)
 
@@ -473,10 +498,6 @@ instance FieldNames e (Barf e a)
 foobar :: IO ()
 foobar = do
   let eps = 2.5e-2
-      halfeps = 0.5 * eps
-      lambda_c = 0.1931833275037836
-      epslam = eps * lambda_c
-      rho = eps * (1 - 2 * lambda_c)
       n = 2
       fn = fieldNames :: Foo Identity Float (FieldName Identity)
   fps <- openSampleFiles fn
@@ -494,7 +515,7 @@ foobar = do
   mn <- letM $ sqrt $ a' * a' + b' * b'
   pokeElemOff mom (a' / mn) 0
   pokeElemOff mom (b' / mn) 1
-  withGrad @_ @IO @Identity @Float (arr (\(Foo x y) -> (x, y)) >>> op2 (\x y -> (0.5 * (x * x + y * y), \dz -> (x * dz, y * dz)))) $ \tape grad -> do
+  withGrad @_ @IO @Identity @Float (arr (\(Foo x y) -> (x, y)) >>> op2 (\x y -> (0.5 * (x * x + y * y), \dz -> (x * dz, y * dz)))) $ \tape x grad -> do
     let Tape tape' dtape' = tape
     a <- randn
     b <- randn
@@ -502,16 +523,9 @@ foobar = do
     pokeElemOff tape' b 1
     _ <- grad
     rangeM (0 :: Identity Int64) 100000 $ \_ -> do
-      -- minimal norm step
-      _ <- updateMomentum dtape' mom epslam n
-      updatePosition tape' mom halfeps n
-      _ <- grad
-      _ <- updateMomentum dtape' mom rho n
-      updatePosition tape' mom halfeps n
-      _ <- grad
-      _ <- updateMomentum dtape' mom epslam n
+      minimalNormStep tape' dtape' mom n grad eps
       -- save state
-      writeSamples fps $ Foo (PrimalV tape') (PrimalV $ tape' `ptrAdd` sizeOf (Proxy @Float))
+      writeSamples fps x
       -- virial
       v <- virial tape' mom dtape' (fromIntegral n)
       modifyRef ivirial (+ v)

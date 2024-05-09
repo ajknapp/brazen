@@ -331,7 +331,7 @@ withGrad ::
     FZip (f e a)
   ) =>
   RAD m e a (f e a Dual) (Dual (Var e a)) ->
-  (Tape e a -> m (e a, f e a (Primal e a)) -> m ()) ->
+  (Tape e a -> f e a (Primal e a) -> m (e a, f e a (Primal e a)) -> m ()) ->
   m ()
 withGrad (RAD f) k = do
   let m = flatSize (Proxy @(f e a (Primal e a)))
@@ -339,7 +339,7 @@ withGrad (RAD f) k = do
   tape <- ptrCast <$> malloc ((fromIntegral n :: e Int64) * sizeOf (Proxy @a))
   dtape <- ptrCast <$> malloc ((fromIntegral n :: e Int64) * sizeOf (Proxy @a))
   let tape' = Tape tape dtape
-  k tape' $ do
+  k tape' (unpack tape) $ do
     rangeM 0 (fromIntegral n) $ \i -> pokeElemOff dtape 0 i
     z <- lowerCodensity $ reset $ do
       runReaderT (runKleisli f'' $ unpackTangent tape dtape) tape' >>= \case
@@ -356,6 +356,23 @@ withGrad (RAD f) k = do
 
 class (Flat (f e a (Primal e a))) => Tangential f e a where
   unpack :: e (Ptr a) -> f e a (Primal e a)
+  default unpack :: (Generic (f e a (Primal e a)), GTangential (Rep (f e a (Primal e a))) e a) => e (Ptr a) -> f e a (Primal e a)
+  unpack p = GHC.Generics.to $ gunpack p
+
+class GTangential f e a where
+  gunpack :: e (Ptr a) -> f b
+
+instance (GTangential f e a, GTangential g e a, GFlat f, Num (e Int64), ExpSized e a, ExpPtr e a) => GTangential (f :*: g) e a where
+  gunpack p = gunpack p :*: gunpack (p `ptrAdd` (sizeOf (Proxy @a)*fromIntegral (gflatSize (Proxy @(f a)))))
+
+instance GTangential (K1 i (Primal e a (Var e a))) e a where
+  gunpack p = K1 $ PrimalV p
+
+instance ReifyTensorBound sh => GTangential (K1 i (Primal e a (Tensor sh e a))) e a where
+  gunpack p = K1 $ PrimalT $ Tensor (tensorBound (Proxy @sh)) p
+
+instance GTangential f e a => GTangential (M1 c i f) e a where
+  gunpack p = M1 (gunpack p)
 
 unpackTangent ::
   (FZip (f e a), Tangential f e a) =>
@@ -396,12 +413,11 @@ instance FRepeat (DingoDango e a) where frepeat = gfrepeat
 
 instance Flat (DingoDango e a (Primal e a))
 
-instance (ExpSized e a, ExpPtr e a) => Tangential DingoDango e a where
-  unpack tape = DingoDango (PrimalV tape) (PrimalT $ Tensor (TensorBoundCons Proxy TensorBoundNil) (tape `ptrAdd` sizeOf (Proxy @a)))
+instance (Num (e Int64), ExpSized e a, ExpPtr e a) => Tangential DingoDango e a where
 
 foo :: IO ()
 foo = do
-  withGrad (arr (Identity . f2) >>> opNMapSum (\(Identity z) -> let_ (sin z) $ \y -> y * y) (\z -> 2 * sin z * cos z)) $ \tape grad -> do
+  withGrad (arr (Identity . f2) >>> opNMapSum (\(Identity z) -> let_ (sin z) $ \y -> y * y) (\z -> 2 * sin z * cos z)) $ \tape _ grad -> do
     rangeM (0 :: Identity Int) 3 $ \_ -> do
       let Tape tape' _ = tape
       pokeElemOff tape' 0 0
