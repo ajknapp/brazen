@@ -1,6 +1,7 @@
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE DerivingVia #-}
@@ -10,11 +11,15 @@
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Brazen where
 
@@ -219,6 +224,8 @@ updateMomentum g u eps n = do
 data Foo e a f = Foo {_foo1, _foo2 :: f (Var e a)}
   deriving (Generic)
 
+deriving instance (Show (f (Var e a))) => Show (Foo e a f)
+
 instance FFunctor (Foo e a) where ffmap = ffmapDefault
 
 instance FFoldable (Foo e a) where ffoldMap = ffoldMapDefault
@@ -276,29 +283,6 @@ writeSampleHeaders fps names = ftraverse_ writeSampleHeaders' (fzipWith Pair nam
               hputString fp str'
               writeIdx idx
           hputString fp newline
-
-data Dingo e a f = Dingo {dingoA :: f (Vector 6 e a), dingoB :: f (Matrix 3 3 e a)}
-  deriving (Generic)
-
-instance FFunctor (Dingo e a) where ffmap = ffmapDefault
-
-instance FTraversable (Dingo e a) where ftraverse = gftraverse
-
-instance FFoldable (Dingo e a) where ffoldMap = ffoldMapDefault
-
-instance FZip (Dingo e a) where fzipWith = gfzipWith
-
-dingoNames :: Dingo e a (FieldName e)
-dingoNames = Dingo (FieldTensor "dingoA" (TensorBoundCons Proxy TensorBoundNil)) (FieldTensor "dingoB" (TensorBoundCons Proxy (TensorBoundCons Proxy TensorBoundNil)))
-
-bleh :: IO ()
-bleh = do
-  a <- newTensor @_ @_ @Float (tensorBound Proxy)
-  b <- newTensor (tensorBound Proxy)
-  fps <- openSampleFiles dingoNames
-  writeSampleHeaders fps dingoNames
-  writeSamples fps $ Dingo (PrimalT a) (PrimalT b)
-  closeSampleFiles fps
 
 type CmdRange m e = (CmdWhile m e, CmdRef m e Int64, ExpOrd e Int64, Num (e Int64))
 
@@ -422,12 +406,69 @@ data FieldName e a where
   FieldVar :: String -> FieldName e (Var e a)
   FieldTensor :: String -> TensorBound sh e -> FieldName e (Tensor sh e a)
 
+deriving instance Show (TensorBound e a)
+
+deriving instance Show (FieldName e a)
+
 fieldName :: FieldName e a -> String
 fieldName (FieldVar s) = s
 fieldName (FieldTensor s _) = s
 
-fieldNames :: Foo e a (FieldName e)
-fieldNames = Foo (FieldVar "mu1") (FieldVar "mu2")
+fieldNames' :: Foo e a (FieldName e)
+fieldNames' = Foo (FieldVar "mu1") (FieldVar "mu2")
+
+class GFieldNames f where
+  gfieldNames :: String -> Proxy (f a) -> f a
+
+instance (GFieldNames f, GFieldNames g) => GFieldNames (f :*: g) where
+  gfieldNames prefix _ = gfieldNames prefix Proxy :*: gfieldNames prefix Proxy
+
+instance (FFunctor f, FieldNames e f) => GFieldNames (K1 i (f (FieldName e))) where
+  gfieldNames prefix _ =
+    K1 $
+      ffmap
+        ( \case
+            FieldVar s -> FieldVar (prepend s)
+            FieldTensor s t -> FieldTensor (prepend s) t
+        )
+        (fieldNames :: f (FieldName e))
+    where
+      prepend s = prefix <> "_" <> s
+
+instance GFieldNames (K1 i (FieldName e (Var e a))) where
+  gfieldNames prefix _ = K1 $ FieldVar prefix
+
+instance (ReifyTensorBound sh) => GFieldNames (K1 i (FieldName e (Tensor sh e a))) where
+  gfieldNames prefix _ = K1 $ FieldTensor prefix (tensorBound (Proxy @sh))
+
+instance (GFieldNames f) => GFieldNames (D1 i f) where
+  gfieldNames prefix _ = M1 $ gfieldNames prefix Proxy
+
+instance (GFieldNames f) => GFieldNames (C1 i f) where
+  gfieldNames prefix _ = M1 $ gfieldNames prefix Proxy
+
+instance (KnownSymbol n, GFieldNames f) => GFieldNames (S1 ('MetaSel ('Just n) u s d) f) where
+  gfieldNames prefix p = M1 $ gfieldNames (prefix <> fname) (p' p)
+    where
+      p' :: Proxy (S1 i f a) -> Proxy (f a)
+      p' _ = Proxy
+      fname = case symbolVal (Proxy @n) of
+        '_' : xs -> xs
+        xs -> xs
+
+class FieldNames e f where
+  fieldNames :: f (FieldName e)
+  default fieldNames :: (Generic (f (FieldName e)), GFieldNames (Rep (f (FieldName e)))) => f (FieldName e)
+  fieldNames = GHC.Generics.to $ gfieldNames "" (Proxy @(Rep (f (FieldName e)) (FieldName e ())))
+
+instance FieldNames e (Foo e a)
+
+data Barf e a f = Barf {_barf1, _barf2 :: Foo e a f}
+  deriving (Generic)
+
+deriving instance (Show (f (Var e a))) => Show (Barf e a f)
+
+instance FieldNames e (Barf e a)
 
 foobar :: IO ()
 foobar = do
@@ -437,8 +478,9 @@ foobar = do
       epslam = eps * lambda_c
       rho = eps * (1 - 2 * lambda_c)
       n = 2
-  fps <- openSampleFiles fieldNames
-  writeSampleHeaders fps fieldNames
+      fn = fieldNames :: Foo Identity Float (FieldName Identity)
+  fps <- openSampleFiles fn
+  writeSampleHeaders fps fn
   fv <- withString "virial.csv" $ \file ->
     withString "w" $ \mode -> do
       fv' <- fopen file mode
