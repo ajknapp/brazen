@@ -29,11 +29,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1714007475,
-        "narHash": "sha256-7Smg9QMzDPYYx0kylHDCHhk8OAgVQxaKqQ5st6FNb4k=",
+        "lastModified": 1715212982,
+        "narHash": "sha256-PAr9uPYAUViPOFHXtr0eqTPqOO9v4aG3JvateB/MNCc=",
         "ref": "refs/heads/master",
-        "rev": "c8705f88c6e8d4353886da3cab84d4ef27320c3a",
-        "revCount": 66,
+        "rev": "92b6aebc103bf177a3ce479e15667d82a0df4a18",
+        "revCount": 67,
         "type": "git",
         "url": "ssh://git@github.com:/ajknapp/janus.git"
       },
