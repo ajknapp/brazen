@@ -23,20 +23,16 @@
 
 module Brazen where
 
--- import Control.Monad.Codensity
--- import Control.Monad.ST
--- import Control.Monad.State
-
 import Brazen.AD
-import Brazen.Numeric
+import Brazen.Distributions
 import Control.Arrow
-import Control.Arrow.Transformer.State
 import Control.Category
 import Control.Lens
 import Data.Functor.Product
 import Data.HKD
 import Data.Int
 import Data.Proxy
+import qualified Data.Vector.Storable as VS
 import Data.Word
 import Foreign (Ptr)
 import Foreign.C
@@ -52,113 +48,7 @@ import Janus.Expression.Bits
 import Janus.Expression.Bool
 import Janus.Expression.Cast
 import Janus.Expression.Ord
-import Linear
-import qualified Numeric.AD as AD
 import Prelude hiding (id, (.))
-
--- import Janus.Command.Cond
--- import Janus.Expression.Eq
-
-data Joint f g a = Joint {_parameters :: f a, _observations :: g a}
-  deriving (Generic)
-
-$(makeLenses ''Joint)
-
-data TwoSamplePrior f a = TwoSamplePrior {_mu1, _mu2 :: f a}
-  deriving (Generic)
-
-$(makeLenses ''TwoSamplePrior)
-
-data TwoSampleLikelihood f a = TwoSampleLikelihood {_obsGroup1, _obsGroup2 :: f a}
-  deriving (Generic)
-
-$(makeLenses ''TwoSampleLikelihood)
-
-data HMCState s e a = HMCState {_hmcState :: s, _hmcLP :: Maybe (Dual (Var e a))}
-
-$(makeLenses ''HMCState)
-
--- newtype HMC m e s c a b = HMC {getHMC :: StateArrow (HMCState s e c) (RAD m e c) a b}
-newtype HMC m e s c a b = HMC {getHMC :: RAD m e c (a, HMCState s e c) (b, HMCState s e c)}
-  deriving (Category, Arrow, ArrowChoice) via StateArrow (HMCState s e c) (RAD m e c)
-
-normal :: (CmdRAD m e a, Floating (e a)) => Getting (Dual (Var e a)) s (Dual (Var e a)) -> HMC m e s a (Dual (Var e a), Dual (Var e a)) (Dual (Var e a))
-normal l = HMC $ proc ((mu, sigma2), hmc) -> do
-  let theta = hmc ^. hmcState . l
-  -- 0.5*(theta-mu)^2/sigma2
-  let half = auto 0.5
-  x <- subA -< (theta, mu)
-  y <- mulA -< (x, x)
-  z <- divA -< (y, sigma2)
-  z' <- mulA -< (half, z)
-  -- log (2*pi*sigma2)
-  let twopi = auto $ 2 * pi
-  twopis2 <- mulA -< (twopi, sigma2)
-  ltwopis2 <- logA -< twopis2
-  z'' <- mulA -< (half, ltwopis2)
-  lp <- addA -< (z', z'')
-  case hmc ^. hmcLP of
-    Nothing -> do returnA -< (theta, hmc & hmcLP ?~ lp)
-    Just lp' -> do
-      lp'' <- addA -< (lp, lp')
-      returnA -< (theta, hmc & hmcLP ?~ lp'')
-
--- twoSampleModel ::
---   (CmdRAD m e a, Floating (e a), KnownNat n) =>
---   HMCModel m e (TwoSamplePrior (DVar e)) (TwoSampleLikelihood (DTensor '[n] e)) a
--- twoSampleModel = proc _ -> do
---   mu1' <- normal (parameters . mu1) -< (auto 0, auto 1)
---   mu2' <- normal (parameters . mu2) -< (auto 0, auto 1)
---   x1' <- iidNormal (observations . obsGroup1) -< (mu1', auto 1)
---   x2' <- iidNormal (observations . obsGroup2) -< (mu2', auto 1)
---   returnA -< Joint (TwoSamplePrior mu1' mu2') (TwoSampleLikelihood x1' x2')
-
--- twoSamplePrior ::
---   (CmdRAD m e a, Floating (e a)) =>
---   Getting (Dual (Var e a)) s (TwoSamplePrior (DVar e) a) ->
---   HMC m e s a () (TwoSamplePrior (DVar e) a)
--- twoSamplePrior l = proc _ -> do
---   mu1' <- normal (l . mu1) -< (auto 0, auto 1)
---   mu2' <- normal (l . mu2) -< (auto 0, auto 1)
---   returnA -< TwoSamplePrior mu1' mu2'
-
--- twoSampleLikelihood ::
---   (CmdRAD m e a, Floating (e a), KnownNat n) =>
---   Getting (DTensor '[n] e a) s (TwoSampleLikelihood (DTensor '[n] e) a) ->
---   HMC m e s a (TwoSamplePrior (DVar e) a) (TwoSampleLikelihood (DTensor '[n] e) a)
--- twoSampleLikelihood l = proc (TwoSamplePrior mu1' mu2') -> do
---   x1' <- iidNormal (l . obsGroup1) -< (mu1', auto 1)
---   x2' <- iidNormal (l . obsGroup2) -< (mu2', auto 1)
---   returnA -< TwoSampleLikelihood x1' x2'
-
--- type HMCModel m e f g a = HMC m e (Joint f g a) a () (Joint f g a)
-
--- twoSample ::
---   (CmdRAD m e a, Floating (e a), KnownNat n) =>
---   HMCModel m e (TwoSamplePrior (DVar e)) (TwoSampleLikelihood (DTensor '[n] e)) a
--- twoSample = proc _ -> do
---   theta <- twoSamplePrior parameters -< ()
---   x <- twoSampleLikelihood observations -< theta
---   returnA -< Joint theta x
-
-iidNormal :: (CmdRAD m e a, Floating (e a), KnownNat n) => Getting (DVector n e a) s (DVector n e a) -> HMC m e s a (Dual (Var e a), Dual (Var e a)) (DVector n e a)
-iidNormal l = HMC $ proc ((mu, sigma2), hmc) -> do
-  let theta = hmc ^. hmcState . l
-  lp <- opNMapSum normal' (AD.grad normal') -< V3 (DTBroadcast mu) (DTBroadcast sigma2) theta
-  case hmc ^. hmcLP of
-    Nothing -> returnA -< (theta, hmc & hmcLP ?~ lp)
-    Just lp' -> do
-      lp'' <- addA -< (lp, lp')
-      returnA -< (theta, hmc & hmcLP ?~ lp'')
-  where
-    normal' (V3 mu' sigma2' x') = let y = x' - mu' in 0.5 * (y * y / sigma2' - log (2 * pi * sigma2'))
-
-runHMC :: (CmdRAD m e a, Floating (e a)) => HMC m e s a s b -> RAD m e a s (b, Dual (Var e a))
-runHMC (HMC lp) = proc s -> do
-  (b, hmc') <- lp -< (s, HMCState s Nothing)
-  case hmc' ^. hmcLP of
-    Nothing -> returnA -< (b, auto 0)
-    Just lp' -> returnA -< (b, lp')
 
 updatePosition ::
   ( CmdRef m e Int64,
@@ -234,7 +124,7 @@ minimalNormStep ::
   e (Ptr a) ->
   e (Ptr a) ->
   Int ->
-  m (e a, f (Primal e a)) ->
+  m b ->
   e a ->
   m ()
 minimalNormStep tape dtape mom n grad eps = do
@@ -253,6 +143,8 @@ minimalNormStep tape dtape mom n grad eps = do
 
 data Foo e a f = Foo {_fooA, _fooB :: f (Var e a)}
   deriving (Generic)
+
+$(makeLenses ''Foo)
 
 deriving instance (Show (f (Var e a))) => Show (Foo e a f)
 
@@ -386,7 +278,7 @@ iterateTensor (TensorBoundCons p ts) k = rangeM 0 (fromIntegral $ natVal p) $ \i
 instance (ExpSized e a, ExpPtr e a) => Tangential Foo e a where
   unpack tape = Foo (PrimalV tape) (PrimalV $ tape `ptrAdd` sizeOf (ptrProxy tape))
 
-data HMCState' e a = HMCState'
+data MCLMCState' e a = HMCState'
   { _hmcPos, _hmcMom :: e (Ptr a),
     _hmcDim :: Int
   }
@@ -495,11 +387,59 @@ deriving instance (Show (f (Var e a))) => Show (Barf e a f)
 
 instance FieldNames e (Barf e a)
 
-foobar :: IO ()
-foobar = do
-  let eps = 2.5e-2
+evalMCLMC ::
+  (FFunctor (g e a), Num (e a)) =>
+  MCLMCModel m e f g a ->
+  g e a (Primal e a) ->
+  RAD m e a (f e a Dual) (Dual (Var e a))
+evalMCLMC (MCLMC hmc) obs = proc x -> do
+  (_, hmc') <- hmc -< ((), MCLMCState (Joint x (dconst obs)) Nothing)
+  case hmc' ^. hmcLP of
+    Just l -> returnA -< l
+    Nothing -> returnA -< auto 0
+
+applyBounce :: (CmdRange m e, CmdStorable m e a, CmdRef m e a, Floating (e a)) => e (Ptr a) -> Int -> m (e a) -> m ()
+applyBounce mom n randn' = do
+  let nu = 1 / sqrt (fromIntegral n * 100)
+  nm <- newRef 0
+  rangeM 0 (fromIntegral n) $ \i -> do
+    ui <- peekElemOff mom i
+    nm' <- readRef nm
+    r <- randn'
+    ui' <- letM $ ui + nu * r
+    pokeElemOff mom ui' i
+    writeRef nm (nm' + ui' * ui)
+  nm' <- readRef nm >>= letM . sqrt
+  rangeM 0 (fromIntegral n) $ \i -> do
+    peekElemOff mom i >>= \ui -> pokeElemOff mom (ui / nm') i
+
+data Prior e a f = Prior
+  deriving (Generic)
+
+instance FFunctor (Prior e a) where ffmap = ffmapDefault
+
+instance FFoldable (Prior e a) where ffoldMap = ffoldMapDefault
+
+instance FTraversable (Prior e a) where ftraverse = gftraverse
+
+sample ::
+  forall m e a f g.
+  ( FTraversable (f e a),
+    FZip (f e a),
+    Tangential f e a,
+    FFunctor (g e a),
+    FieldNames e (f e a),
+    a ~ Float,
+    e ~ Identity,
+    m ~ IO
+  ) =>
+  MCLMCModel m e f g a ->
+  g e a (Primal e a) ->
+  m ()
+sample hmc obs = do
+  let eps = 1e-2
       n = 2
-      fn = fieldNames :: Foo Identity Float (FieldName Identity)
+      fn = fieldNames @e @(f e a)
   fps <- openSampleFiles fn
   writeSampleHeaders fps fn
   fv <- withString "virial.csv" $ \file ->
@@ -507,46 +447,97 @@ foobar = do
       fv' <- fopen file mode
       withString "virial\n" $ \header -> hputString fv' header
       pure fv'
-  mom <- ptrCast <$> calloc 2 (sizeOf (Proxy @Float))
+  mom <- ptrCast <$> calloc 2 (sizeOf (Proxy @a))
   ivirial <- newRef 0
-  trajLen <- newRef (0 :: Identity Int64)
+  trajLen <- newRef (0 :: e Int64)
   a' <- randn
   b' <- randn
   mn <- letM $ sqrt $ a' * a' + b' * b'
   pokeElemOff mom (a' / mn) 0
   pokeElemOff mom (b' / mn) 1
-  withGrad @_ @IO @Identity @Float (arr (\(Foo x y) -> (x, y)) >>> op2 (\x y -> (0.5 * (x * x + y * y), \dz -> (x * dz, y * dz)))) $ \tape x grad -> do
+  withGrad @_ @m @e @a (evalMCLMC hmc obs) $ \tape x grad -> do
     let Tape tape' dtape' = tape
     a <- randn
     b <- randn
     pokeElemOff tape' a 0
     pokeElemOff tape' b 1
     _ <- grad
-    rangeM (0 :: Identity Int64) 100000 $ \_ -> do
+    rangeM (0 :: e Int64) 100000 $ \_ -> do
       minimalNormStep tape' dtape' mom n grad eps
-      -- save state
+      applyBounce mom n randn
       writeSamples fps x
-      -- virial
       v <- virial tape' mom dtape' (fromIntegral n)
       modifyRef ivirial (+ v)
       iv <- readRef ivirial
       trajLen' <- readRef trajLen
       writeRef trajLen (trajLen' + 1)
       hformat fv iv "\n"
-      -- bounce
-      let nu = 1 / sqrt (fromIntegral n * 48)
-      u0' <- peekElemOff mom 0
-      u1' <- peekElemOff mom 1
-      u0 <- (+ u0') . (* nu) <$> randn
-      u1 <- (+ u1') . (* nu) <$> randn
-      unorm <- letM $ sqrt (u0 * u0 + u1 * u1)
-      pokeElemOff mom (u0 / unorm) 0
-      pokeElemOff mom (u1 / unorm) 1
       writeRef ivirial 0
       writeRef trajLen 0
   closeSampleFiles fps
   _ <- fclose fv
   pure ()
+
+simpleModel :: (CmdRAD m e a, Floating (e a)) => MCLMCModel m e Foo Prior a
+simpleModel = proc _ -> do
+  a <- normal (parameters . fooA) -< (auto 0, auto 1)
+  b <- normal (parameters . fooB) -< (auto 0, auto 1)
+  returnA -< Joint (Foo a b) Prior
+
+data TwoSamplePrior e a f = TwoSamplePrior {_mu1, _mu2 :: f (Var e a)}
+  deriving (Generic)
+
+$(makeLenses ''TwoSamplePrior)
+
+instance FFunctor (TwoSamplePrior e a) where ffmap = ffmapDefault
+
+instance FFoldable (TwoSamplePrior e a) where ffoldMap = ffoldMapDefault
+
+instance FTraversable (TwoSamplePrior e a) where ftraverse = gftraverse
+
+instance FZip (TwoSamplePrior e a) where fzipWith = gfzipWith
+
+instance Flat (TwoSamplePrior e a (Primal e a))
+
+instance (Num (e Int64), ExpPtr e a) => Tangential TwoSamplePrior e a
+
+instance FieldNames e (TwoSamplePrior e a)
+
+data TwoSampleLikelihood n m e a f = TwoSampleLikelihood {_obsGroup1 :: f (Vector n e a), _obsGroup2 :: f (Vector m e a)}
+  deriving (Generic)
+
+$(makeLenses ''TwoSampleLikelihood)
+
+instance FFunctor (TwoSampleLikelihood n m e a) where ffmap = ffmapDefault
+
+instance FFoldable (TwoSampleLikelihood n m e a) where ffoldMap = ffoldMapDefault
+
+instance FTraversable (TwoSampleLikelihood n m e a) where ftraverse = gftraverse
+
+twoSampleModel ::
+  (CmdRAD m e a, Floating (e a), KnownNat n1, KnownNat n2) =>
+  MCLMCModel m e TwoSamplePrior (TwoSampleLikelihood n1 n2) a
+twoSampleModel = proc _ -> do
+  m1 <- normal (parameters . mu1) -< (auto 0, auto 1)
+  m2 <- normal (parameters . mu2) -< (auto 0, auto 1)
+  x1 <- iidNormal (observations . obsGroup1) -< (m1, auto 1)
+  x2 <- iidNormal (observations . obsGroup2) -< (m2, auto 1)
+  returnA -< Joint (TwoSamplePrior m1 m2) (TwoSampleLikelihood x1 x2)
+
+runTwoSampleModel :: VS.Vector Float -> VS.Vector Float -> IO ()
+runTwoSampleModel x y = case someNatVal (toInteger $ VS.length x) of
+  Just (SomeNat px) -> case someNatVal (toInteger $ VS.length y) of
+    Just (SomeNat py) -> VS.unsafeWith x $ \x' -> VS.unsafeWith y $ \y' ->
+      let mkPTensor n ptr = PrimalT $ Tensor (TensorBoundCons n TensorBoundNil) ptr
+       in sample twoSampleModel $ TwoSampleLikelihood (mkPTensor px (pure x')) (mkPTensor py (pure y'))
+    Nothing -> error "VS.length returned a negative value!"
+  Nothing -> error "VS.length returned a negative value!"
+
+data PCGState m e = PCGState
+  { pcgState :: Ref m e Word64,
+    pcgInc :: e Word64
+  }
+  deriving (Generic)
 
 pcgNext ::
   ( CmdRef m e Word64,
@@ -558,10 +549,9 @@ pcgNext ::
     ExpIntegralCast e Word64 Word32,
     ExpIntegralCast e Word64 Int
   ) =>
-  Ref m e Word64 ->
-  e Word64 ->
+  PCGState m e ->
   m (e Word32)
-pcgNext state inc = do
+pcgNext (PCGState state inc) = do
   oldstate <- readRef state
   writeRef state (oldstate * 6364136223846793005 + (inc `ior` 1))
   xorshifted <- letM . toIntegral $ ((oldstate `rshift` 18) `ieor` oldstate) `rshift` 27

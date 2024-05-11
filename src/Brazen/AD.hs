@@ -287,6 +287,9 @@ type DMatrix n m e a = DTensor '[n, m] e a
 autoT :: Tensor sh e a -> DTensor sh e a
 autoT = DTConst
 
+broadcast :: Dual (Var e a) -> Dual (Tensor sh e a)
+broadcast = DTBroadcast
+
 dotA :: forall m e a n. (CmdRAD m e a, KnownNat n) => RAD m e a (DVector n e a, DVector n e a) (Dual (Var e a))
 dotA = arr (uncurry V2) >>> opNMapSum (\(V2 x y) -> x * y) (\(V2 x y) -> V2 y x)
 
