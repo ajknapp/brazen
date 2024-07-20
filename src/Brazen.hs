@@ -53,6 +53,7 @@ import Janus.Command.While
 import Janus.Expression.Bits
 import Janus.Expression.Bool
 import Janus.Expression.Cast
+import Janus.Expression.Inject
 import Janus.Expression.Ord
 -- import Janus.FFI.Ret
 import Prelude hiding (id, (.))
@@ -307,11 +308,11 @@ instance (ExpFloatingCast JanusC CInt a, Fractional (JanusC a)) => CmdRand Janus
     r <- crand
     pure $ toFloating r / (fromIntegral (maxBound :: CInt) :: JanusC a)
 
-randn :: (CmdRand m e a, Floating (e a)) => m (e a)
+randn :: forall m e a. (JanusTyped e a, CmdRef m e, CmdRand m e a, Floating (e a)) => m (e a)
 randn = do
   u1 <- randf
   u2 <- randf
-  pure $ sqrt (-2 * log u1) * cos (2 * pi * u2)
+  letM @_ @e $ sqrt (-2 * log u1) * cos (2 * pi * u2)
 
 virial ::
   ( JanusTyped e a,
@@ -431,7 +432,7 @@ applyBounce nu mom n randn' = do
   rangeM 0 (fromIntegral n) $ \i -> do
     peekElemOff mom i >>= \ui -> pokeElemOff mom (ui / nm') i
 
-fillNormal :: (CmdRand m e a, CmdStorable m e a, CmdRange m e, Monad m, Floating (e a)) => e (Ptr a) -> e Int64 -> m ()
+fillNormal :: (JanusTyped e a, CmdRef m e, CmdRand m e a, CmdStorable m e a, CmdRange m e, Monad m, Floating (e a)) => e (Ptr a) -> e Int64 -> m ()
 fillNormal p n = rangeM 0 n $ \i ->
   randn >>= flip (pokeElemOff p) i
 
@@ -555,7 +556,7 @@ sample hmc obs mom nu = do
   _ <- fclose fv
   pure ()
 
-simpleModel :: (CmdRAD m e a, Floating (e a)) => MCLMCModel m e Foo Prior a
+simpleModel :: (CmdRAD m e a, ExpInject e a, Floating (e a), Eq a, Floating a) => MCLMCModel m e Foo Prior a
 simpleModel = proc _ -> do
   a <- normal (parameters . fooA) -< (auto 0, auto 1)
   b <- normal (parameters . fooB) -< (auto 0, auto 1)
@@ -592,7 +593,7 @@ instance FFoldable (TwoSampleLikelihood n m e a) where ffoldMap = ffoldMapDefaul
 instance FTraversable (TwoSampleLikelihood n m e a) where ftraverse = gftraverse
 
 twoSampleModel ::
-  (CmdRAD m e a, Floating (e a), KnownNat n1, KnownNat n2) =>
+  (CmdRAD m e a, ExpInject e a, Eq a, Floating (e a), Floating a, KnownNat n1, KnownNat n2) =>
   MCLMCModel m e TwoSamplePrior (TwoSampleLikelihood n1 n2) a
 twoSampleModel = proc _ -> do
   s1 <- halfCauchy (parameters . sigma21) -< auto 10

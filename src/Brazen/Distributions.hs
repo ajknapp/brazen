@@ -12,6 +12,7 @@ module Brazen.Distributions where
 
 import Brazen.AD
 import Brazen.Numeric
+import Brazen.Partial
 import Control.Arrow
 import Control.Arrow.Transformer.State
 import Control.Category
@@ -21,6 +22,7 @@ import GHC.Float
 import GHC.Generics
 import GHC.TypeLits
 import Janus.Command.Array
+import Janus.Expression.Inject
 import Linear
 import qualified Numeric.AD as AD
 import qualified Numeric.AD.Internal.Reverse as AD
@@ -41,10 +43,10 @@ newtype MCLMC m e s c a b = MCLMC {getHMC :: RAD m e c (a, MCLMCState s e c) (b,
 type MCLMCModel m e f g a = MCLMC m e (Joint (f e a) (g e a) (Dual e a)) a () (Joint (f e a) (g e a) (Dual e a))
 
 opNAD ::
-  (Traversable f, Applicative f, CmdRAD m e a) =>
-  (forall s. (Reifies s AD.Tape) => f (AD.Reverse s (e a)) -> AD.Reverse s (e a)) ->
+  (Traversable f, Applicative f, CmdRAD m e a, ExpInject e a, Num a, Eq a) =>
+  (forall s. (Reifies s AD.Tape) => f (AD.Reverse s (Partial e a)) -> AD.Reverse s (Partial e a)) ->
   RAD m e a (f (Dual e a (Var e a))) (Dual e a (Var e a))
-opNAD f = opN (\x -> let (y, dy) = AD.grad' f x in (y, (dy ^*)))
+opNAD f = opN (\x -> let (y, dy) = AD.grad' f (fmap Dynamic x) in (runPartial y, \dz -> fmap ((* dz) . runPartial) dy))
 
 updateLP ::
   (CmdRAD m e a) =>
@@ -60,7 +62,7 @@ normalD :: (Floating (e a)) => V3 (e a) -> e a
 normalD (V3 mu sigma2 x) = (x - mu) * (x - mu) / (2 * sigma2) + 0.5 * log (2 * pi * sigma2)
 
 normal ::
-  (CmdRAD m e a, Floating (e a)) =>
+  (CmdRAD m e a, Floating (e a), Floating a, Eq a, ExpInject e a) =>
   Getting (Dual e a (Var e a)) s (Dual e a (Var e a)) ->
   MCLMC m e s a (Dual e a (Var e a), Dual e a (Var e a)) (Dual e a (Var e a))
 normal l = MCLMC $ proc ((mu, sigma2), hmc) -> do
@@ -69,7 +71,7 @@ normal l = MCLMC $ proc ((mu, sigma2), hmc) -> do
   updateLP -< (hmc, theta, lp)
 
 normal' ::
-  (CmdRAD m e a, Floating (e a)) =>
+  (CmdRAD m e a, Floating (e a), Floating a, Eq a, ExpInject e a) =>
   Getting (Dual e a (Var e a)) s (Dual e a (Var e a)) ->
   MCLMC m e s a (Dual e a (Var e a), Dual e a (Var e a)) (Dual e a (Var e a))
 normal' l = MCLMC $ proc ((mu, sigma2), hmc) -> do
@@ -79,19 +81,19 @@ normal' l = MCLMC $ proc ((mu, sigma2), hmc) -> do
   updateLP -< (hmc, z, lp)
 
 iidNormal ::
-  (CmdRAD m e a, KnownNat n, Floating (e a)) =>
+  (CmdRAD m e a, KnownNat n, ExpInject e a, Eq a, Floating a, Floating (e a)) =>
   Getting (Dual e a (Vector n e a)) s (Dual e a (Vector n e a)) ->
   MCLMC m e s a (Dual e a (Var e a), Dual e a (Var e a)) (Dual e a (Vector n e a))
 iidNormal l = MCLMC $ proc ((mu, sigma2), hmc) -> do
   let theta = hmc ^. hmcState . l
-  lp <- opNMapSum normalD (AD.grad normalD) -< V3 (broadcast mu) (broadcast sigma2) theta
+  lp <- opNMapSum (runPartial . normalD . fmap Dynamic) (fmap runPartial . AD.grad normalD . fmap Dynamic) -< V3 (broadcast mu) (broadcast sigma2) theta
   updateLP -< (hmc, theta, lp)
 
 halfCauchyD :: (Floating a) => V2 a -> a
 halfCauchyD (V2 scale y) = log1pexp (2 * y) + log (0.5 * pi * scale) - y
 
 halfCauchy ::
-  (CmdRAD m e a, Floating (e a)) =>
+  (CmdRAD m e a, Floating (e a), Eq a, Floating a, ExpInject e a) =>
   Getting (Dual e a (Var e a)) s (Dual e a (Var e a)) ->
   MCLMC m e s a (Dual e a (Var e a)) (Dual e a (Var e a))
 halfCauchy l = MCLMC $ proc (scale, hmc) -> do

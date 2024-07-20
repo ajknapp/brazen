@@ -70,6 +70,7 @@ library
                       Brazen.AD
                       Brazen.Distributions
                       Brazen.Numeric
+                      Brazen.Partial
                       Brazen.Tune
 
     -- Modules included in this library but not exported.

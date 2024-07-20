@@ -272,7 +272,7 @@ readDTensorPrimal (DTConst x) idx = readTensor x idx
 destination :: forall m e a. (ExpPtr e a, Num (e Int64), ExpSized e a) => Int -> ReaderT (Tape e a) (Codensity m) (e (Ptr a), e (Ptr a))
 destination idx = do
   Tape t dt <- ask
-  let inc = flip ptrAdd (fromIntegral idx * sizeOf (Proxy @a))
+  let inc = flip ptrIndex (fromIntegral idx)
   pure (inc t, inc dt)
 
 destinationVector :: forall m e a n. (ExpPtr e a, Num (e Int64), ExpSized e a, KnownNat n) => Int -> ReaderT (Tape e a) (Codensity m) (Vector n e a, Vector n e a)
@@ -371,7 +371,7 @@ class GTangential f e a where
   gunpack :: e (Ptr a) -> f b
 
 instance (GTangential f e a, GTangential g e a, GFlat f, Num (e Int64), ExpSized e a, ExpPtr e a) => GTangential (f :*: g) e a where
-  gunpack p = gunpack p :*: gunpack (p `ptrAdd` (sizeOf (Proxy @a)*fromIntegral (gflatSize (Proxy @(f a)))))
+  gunpack p = gunpack p :*: gunpack (p `ptrIndex` fromIntegral (gflatSize (Proxy @(f a))))
 
 instance GTangential (K1 i (Primal e a (Var e a))) e a where
   gunpack p = K1 $ PrimalV p

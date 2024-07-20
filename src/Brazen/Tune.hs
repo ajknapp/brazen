@@ -1,5 +1,3 @@
-{-# LANGUAGE TypeApplications #-}
-
 module Brazen.Tune where
 
 import qualified Data.Vector.Storable as VS
