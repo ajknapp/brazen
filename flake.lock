@@ -23,62 +23,36 @@
         "flake-utils": [
           "flake-utils"
         ],
-        "libgccjit-hs": "libgccjit-hs",
         "nixpkgs": [
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1715212982,
-        "narHash": "sha256-PAr9uPYAUViPOFHXtr0eqTPqOO9v4aG3JvateB/MNCc=",
+        "lastModified": 1720935285,
+        "narHash": "sha256-KZkoomSyNaw5o52tyjI4m6HuRjpv1PQZZ+ZNgHYCNyA=",
         "ref": "refs/heads/master",
-        "rev": "92b6aebc103bf177a3ce479e15667d82a0df4a18",
-        "revCount": 67,
+        "rev": "98dfdc0578901c99ca6e353f27acedda335280f4",
+        "revCount": 19,
         "type": "git",
         "url": "ssh://git@github.com:/ajknapp/janus.git"
       },
       "original": {
         "type": "git",
         "url": "ssh://git@github.com:/ajknapp/janus.git"
-      }
-    },
-    "libgccjit-hs": {
-      "inputs": {
-        "flake-utils": [
-          "janus",
-          "flake-utils"
-        ],
-        "nixpkgs": [
-          "janus",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1704777348,
-        "narHash": "sha256-BQSBHCO1FOt83977dcptD5MrfVOsYXPveo03s6rvXeo=",
-        "ref": "refs/heads/master",
-        "rev": "4cbda4c51074f78e922db9e00e4cd19f71bfe7fc",
-        "revCount": 27,
-        "type": "git",
-        "url": "ssh://git@github.com:/ajknapp/libgccjit-hs.git"
-      },
-      "original": {
-        "type": "git",
-        "url": "ssh://git@github.com:/ajknapp/libgccjit-hs.git"
       }
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1705331948,
-        "narHash": "sha256-qjQXfvrAT1/RKDFAMdl8Hw3m4tLVvMCc8fMqzJv0pP4=",
+        "lastModified": 1720691131,
+        "narHash": "sha256-CWT+KN8aTPyMIx8P303gsVxUnkinIz0a/Cmasz1jyIM=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "b8dd8be3c790215716e7c12b247f45ca525867e2",
+        "rev": "a046c1202e11b62cbede5385ba64908feb7bfac4",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
-        "ref": "nixos-23.11",
+        "ref": "nixos-24.05",
         "repo": "nixpkgs",
         "type": "github"
       }

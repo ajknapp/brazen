@@ -23,7 +23,7 @@ name:               brazen
 version:            0.1.0.0
 
 -- A short (one-line) description of the package.
-synopsis:           Fourier-tempered Hamiltonian Monte Carlo on the GPU.
+synopsis:           Microcanonical Hamiltonian Monte Carlo on the GPU.
 
 -- A longer description of the package.
 -- description:
@@ -63,13 +63,14 @@ library
 
     cxx-sources:      cbits/math.cpp
     cxx-options:      -O3 -march=native
-    extra-libraries:  stdc++
+    extra-libraries:  fftw3 fftw3f stdc++
 
     -- Modules exported by the library.
     exposed-modules:  Brazen
                       Brazen.AD
                       Brazen.Distributions
                       Brazen.Numeric
+                      Brazen.Tune
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -78,7 +79,7 @@ library
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.17.2.1
+    build-depends:    base ^>=4.18
                     , ad
                     , array
                     , arrows

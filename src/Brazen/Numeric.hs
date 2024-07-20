@@ -99,3 +99,4 @@ foreign import ccall "polygamma" polygamma_c :: CInt -> CDouble -> CDouble
 instance Gamma Double where
   lngamma = coerce lgamma_c
   polygamma n = coerce (polygamma_c (fromIntegral n))
+  
