@@ -26,6 +26,7 @@ module Brazen where
 
 import Brazen.AD
 import Brazen.Distributions
+import Brazen.Shared
 import Brazen.Tune
 import Control.Arrow
 import Control.Category
@@ -556,7 +557,7 @@ sample hmc obs mom nu = do
   _ <- fclose fv
   pure ()
 
-simpleModel :: (CmdRAD m e a, ExpInject e a, Floating (e a), Eq a, Floating a) => MCLMCModel m e Foo Prior a
+simpleModel :: (CmdRAD m e a, ExpInject e a, Floating (ADExp e a), Eq a, Floating a) => MCLMCModel m e Foo Prior a
 simpleModel = proc _ -> do
   a <- normal (parameters . fooA) -< (auto 0, auto 1)
   b <- normal (parameters . fooB) -< (auto 0, auto 1)
@@ -593,7 +594,7 @@ instance FFoldable (TwoSampleLikelihood n m e a) where ffoldMap = ffoldMapDefaul
 instance FTraversable (TwoSampleLikelihood n m e a) where ftraverse = gftraverse
 
 twoSampleModel ::
-  (CmdRAD m e a, ExpInject e a, Eq a, Floating (e a), Floating a, KnownNat n1, KnownNat n2) =>
+  (CmdRAD m e a, ExpInject e a, Eq a, Floating (ADExp e a), Floating a, KnownNat n1, KnownNat n2) =>
   MCLMCModel m e TwoSamplePrior (TwoSampleLikelihood n1 n2) a
 twoSampleModel = proc _ -> do
   s1 <- halfCauchy (parameters . sigma21) -< auto 10

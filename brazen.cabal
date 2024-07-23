@@ -71,6 +71,7 @@ library
                       Brazen.Distributions
                       Brazen.Numeric
                       Brazen.Partial
+                      Brazen.Shared
                       Brazen.Tune
 
     -- Modules included in this library but not exported.
@@ -84,6 +85,9 @@ library
                     , ad
                     , array
                     , arrows
+                    , containers
+                    , data-fix
+                    , data-reify
                     , janus
                     , kan-extensions
                     , hkd

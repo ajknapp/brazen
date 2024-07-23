@@ -20,6 +20,7 @@
 module Brazen.AD where
 
 import Brazen.Numeric
+import Brazen.Shared
 import Control.Applicative
 import Control.Arrow
 import Control.Arrow.Transformer.Static
@@ -76,32 +77,32 @@ instance (CmdRAD m e a) => ArrowNum (RAD m e a) (Dual e a (Var e a)) where
   absA = op1 (\x -> (abs x, signum))
   signumA = op1 (\x -> (signum x, const 0))
 
-instance (CmdRAD m e a, Fractional (e a)) => ArrowFractional (RAD m e a) (Dual e a (Var e a)) where
+instance (CmdRAD m e a, Fractional (ADExp e a)) => ArrowFractional (RAD m e a) (Dual e a (Var e a)) where
   divA = op2 (\x y -> (x / y, \dwdz -> (dwdz / y, dwdz * x / (y * y))))
   recipA = op1 (\x -> (recip x, negate . (* recip (x * x))))
 
-instance (CmdRAD m e a, Floating (e a)) => ArrowFloating (RAD m e a) (Dual e a (Var e a)) where
-  expA = op1 (\x -> let y = let_ (exp x) id in (y, (* y)))
+instance (CmdRAD m e a, Floating (ADExp e a)) => ArrowFloating (RAD m e a) (Dual e a (Var e a)) where
+  expA = op1 (\x -> let y = exp x in (y, (* y)))
   logA = op1 (\x -> (log x, (/ x)))
-  sqrtA = op1 (\x -> let y = let_ (sqrt x) id in (y, (/ (2 * y))))
-  powA = op2 (\x y -> let z = let_ (x ** y) id in (z, \dwdz -> (dwdz * y * (x ** (y - 1)), dwdz * log x * z)))
-  logBaseA = op2 (\x y -> let z = let_ (logBase x y) id in (z, \dwdz -> (-dwdz * z / (x * log x), dwdz / (y * log x))))
+  sqrtA = op1 (\x -> let y = sqrt x in (y, (/ (2 * y))))
+  powA = op2 (\x y -> let z = x ** y in (z, \dwdz -> (dwdz * y * (x ** (y - 1)), dwdz * log x * z)))
+  logBaseA = op2 (\x y -> let z = logBase x y in (z, \dwdz -> (-dwdz * z / (x * log x), dwdz / (y * log x))))
   sinA = op1 (\x -> (sin x, (* cos x)))
   cosA = op1 (\x -> (cos x, negate . (* sin x)))
-  tanA = op1 (\x -> (tan x, \dwdz -> let y = let_ (cos x) id in dwdz / y * y))
+  tanA = op1 (\x -> (tan x, \dwdz -> let y = cos x in dwdz / y * y))
   asinA = op1 (\x -> (asin x, (/ sqrt (1 - x * x))))
   acosA = op1 (\x -> (acos x, negate . (/ sqrt (1 - x * x))))
   atanA = op1 (\x -> (atan x, (/ (1 + x * x))))
   sinhA = op1 (\x -> (sinh x, (* cosh x)))
   coshA = op1 (\x -> (cosh x, (* sinh x)))
-  tanhA = op1 (\x -> (tanh x, (/ (let y = let_ (cosh x) id in y * y))))
+  tanhA = op1 (\x -> (tanh x, (/ (let y = cosh x in y * y))))
   asinhA = op1 (\x -> (asinh x, (/ sqrt (x * x + 1))))
   acoshA = op1 (\x -> (acosh x, (/ sqrt (x * x - 1))))
   atanhA = op1 (\x -> (atanh x, (/ (1 - x * x))))
   log1pA = op1 (\x -> (log1p x, \dz -> dz / (x + 1)))
-  expm1A = op1 (\x -> let y = let_ (expm1 x) id in (y, (* y)))
-  log1pexpA = op1 (\x -> (log1pexpA x, \dz -> let_ (exp x) $ \y -> dz * y / (y + 1)))
-  log1mexpA = op1 (\x -> (log1mexpA x, \dz -> let_ (exp x) $ \y -> dz * y / (y - 1)))
+  expm1A = op1 (\x -> let y = expm1 x in (y, (* y)))
+  log1pexpA = op1 (\x -> (log1pexpA x, \dz -> let y = exp x in dz * y / (y + 1)))
+  log1mexpA = op1 (\x -> (log1mexpA x, \dz -> let y = exp x in dz * y / (y - 1)))
 
 type CmdRAD m e a =
   ( JanusTyped e a,
@@ -110,12 +111,14 @@ type CmdRAD m e a =
     ExpLet e,
     ExpOrd e Int64,
     ExpPtr e a,
+    ExpShare e,
     CmdWhile m e,
     CmdStorable m e a,
     CmdRange m e,
     CmdRef m e,
     CmdMem m e,
     Num (e a),
+    Num (ADExp e a),
     Monad m
   )
 
@@ -130,7 +133,7 @@ data Var e a where
 op1 ::
   forall m e a.
   (CmdRAD m e a) =>
-  (e a -> (e a, e a -> e a)) ->
+  (ADExp e a -> (ADExp e a, ADExp e a -> ADExp e a)) ->
   RAD m e a (Dual e a (Var e a)) (Dual e a (Var e a))
 op1 f =
   arr Identity
@@ -139,7 +142,7 @@ op1 f =
 op2 ::
   forall m e a.
   (CmdRAD m e a) =>
-  (e a -> e a -> (e a, e a -> (e a, e a))) ->
+  (ADExp e a -> ADExp e a -> (ADExp e a, ADExp e a -> (ADExp e a, ADExp e a))) ->
   RAD m e a (Dual e a (Var e a), Dual e a (Var e a)) (Dual e a (Var e a))
 op2 f =
   arr (uncurry V2)
@@ -152,7 +155,7 @@ op2 f =
 op3 ::
   forall m e a.
   (CmdRAD m e a) =>
-  (e a -> e a -> e a -> (e a, e a -> (e a, e a, e a))) ->
+  (ADExp e a -> ADExp e a -> ADExp e a -> (ADExp e a, ADExp e a -> (ADExp e a, ADExp e a, ADExp e a))) ->
   RAD m e a (Dual e a (Var e a), Dual e a (Var e a), Dual e a (Var e a)) (Dual e a (Var e a))
 op3 f =
   arr (\(x, y, z) -> V3 x y z)
@@ -165,25 +168,26 @@ op3 f =
 -- f must be a fixed size container with a zip-like applicative instance
 opN ::
   forall m e a f.
-  (CmdRAD m e a, Traversable f, Applicative f) =>
-  (f (e a) -> (e a, e a -> f (e a))) ->
+  (CmdRAD m e a, Traversable f, Applicative f, ExpShare e) =>
+  (f (ADExp e a) -> (ADExp e a, ADExp e a -> f (ADExp e a))) ->
   RAD m e a (f (Dual e a (Var e a))) (Dual e a (Var e a))
 opN f = RAD $ do
   idx <- get
   put (idx + 1)
   pure $ Kleisli $ \xs -> do
     xs' <- for xs $ \case
-      DVar (VConst a) -> pure a
-      DVar (VConst' a) -> lift . lift $ peek a
-      DVar (VDyn xi _) -> lift . lift $ peek xi
+      DVar (VConst a) -> pure . ADExp $ toShared a
+      DVar (VConst' a) -> lift . lift $ ADExp . toShared <$> peek a
+      DVar (VDyn xi _) -> lift . lift $ ADExp . toShared <$> peek xi
     let (z', dzdx) = f xs'
     (z, dz) <- destination idx
     lift $ shift $ \k -> lift $ do
-      poke z z'
+      poke z (share $ getADExp z')
       w <- k (DVar (VDyn z dz))
       dz' <- peek dz
-      let dxdzs = dzdx dz'
-      for_ ((,) <$> xs <*> dxdzs) $ \(xi, dxidz) -> case xi of
+      let dxdzs = dzdx (ADExp $ toShared dz')
+      dxdzs' <- shareM (fmap getADExp dxdzs)
+      for_ ((,) <$> xs <*> dxdzs') $ \(xi, dxidz) -> case xi of
         DVar (VDyn _ dxi) -> do
           dxi' <- peek dxi
           poke dxi $ dxi' + dxidz
@@ -229,8 +233,8 @@ opNMap f df = RAD $ do
 opNMapSum ::
   forall m e a n f.
   (CmdRAD m e a, Traversable f, Applicative f, KnownNat n) =>
-  (f (e a) -> e a) ->
-  (f (e a) -> f (e a)) ->
+  (f (ADExp e a) -> ADExp e a) ->
+  (f (ADExp e a) -> f (ADExp e a)) ->
   RAD m e a (f (Dual e a (Vector n e a))) (Dual e a (Var e a))
 opNMapSum f df = RAD $ do
   let n = natVal (Proxy @n)
@@ -241,14 +245,14 @@ opNMapSum f df = RAD $ do
     lift $ shift $ \k -> lift $ do
       poke y 0
       rangeM 0 (fromIntegral n) $ \i -> do
-        xs' <- for xs $ \xi -> readDTensorPrimal xi (i :. Z)
+        xs' <- for xs $ \xi -> ADExp . toShared <$> readDTensorPrimal xi (i :. Z)
         y' <- peek y
-        poke y (y' + f xs')
+        poke y (y' + share (getADExp $ f xs'))
       ans <- k (DVar (VDyn y dy))
       rangeM 0 (fromIntegral n) $ \i -> do
-        xs' <- for xs $ \xi -> readDTensorPrimal xi (i :. Z)
+        xs' <- for xs $ \xi -> ADExp . toShared <$> readDTensorPrimal xi (i :. Z)
         dyi' <- peek dy
-        let dxdy' = df xs'
+        dxdy' <- shareM . fmap getADExp $ df xs'
         for_ ((,) <$> xs <*> dxdy') $ \(dxi_, dxidyi') -> case dxi_ of
           DTensor _ dxi -> do
             dxi' <- readTensor dxi (i :. Z)
