@@ -129,7 +129,7 @@ halfCauchy l = MCLMC $ proc (scale, hmc) -> do
   returnA -< (phi, hmc')
 
 uniformT :: (Floating a) => V3 a -> a
-uniformT (V3 a b v) = ((b - a) / pi) * (atan v + 0.5 * pi) + a
+uniformT (V3 a b v) = (b - a) * (tanh v + 1) + a
 
 uniform ::
   (CmdRAD m e a, Floating (ADExp e a), Eq a, Floating a, ExpInject e a) =>
@@ -139,7 +139,7 @@ uniform ::
   MCLMC m e s a () (Dual e a (Var e a))
 uniform a b l = MCLMC $ proc (_, hmc) -> do
   let theta = hmc ^. hmcState . l
-  lp <- opNAD cauchyD -< V3 (auto 0) (auto 1) theta
+  lp <- opNAD (\(Identity y) -> 2 * log (cosh y)) -< Identity theta
   v <- opNAD uniformT -< V3 (auto a) (auto b) theta
   updateLP -< (hmc, v, lp)
 
