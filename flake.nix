@@ -64,7 +64,7 @@
               ];
             librarySystemDepends = [ boost gcc12 gcc12.cc.lib cudaPackages_12_3.cudatoolkit cudaPackages_12_3.libnvjitlink gcc12 linuxPackages.nvidia_x11 ];
             testHaskellDepends = [ tasty tasty-discover tasty-hedgehog tasty-hunit ];
-            description = "Fourier-tempered Hamiltonian Monte Carlo on the GPU.";
+            description = "Microcanonical Hamiltonian Monte Carlo on the GPU.";
             license = "unknown";
             hydraPlatforms = lib.platforms.none;
           };
