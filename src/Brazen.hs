@@ -15,12 +15,12 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE StarIsType #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE StarIsType #-}
 
 module Brazen where
 
@@ -42,25 +42,23 @@ import Data.Word
 import Foreign (Ptr)
 import Foreign.C
 import Foreign.Marshal.Alloc
-import GHC.Float
 import GHC.Generics
 import GHC.TypeLits
+import Janus.Backend.C
 import Janus.Command.Array
 import Janus.Command.Cond
 import Janus.Command.Format
 import Janus.Command.IO
-import Janus.Command.Ref
 import Janus.Command.Range
+import Janus.Command.Ref
 import Janus.Command.While
 import Janus.Expression.Bits
 import Janus.Expression.Bool
 import Janus.Expression.Cast
 import Janus.Expression.Inject
 import Janus.Expression.Ord
--- import Janus.FFI.Ret
-import Prelude hiding (id, (.))
-import Janus.Backend.C
 import Janus.Typed
+import Prelude hiding (id, (.))
 
 updatePosition ::
   ( JanusTyped e a,
@@ -298,7 +296,7 @@ class (Fractional (e a), Monad m) => CmdRand m e a where
 
 foreign import ccall "rand" c_rand :: IO CInt
 
-instance Fractional a => CmdRand IO Identity a where
+instance (Fractional a) => CmdRand IO Identity a where
   randf = do
     r <- c_rand
     pure $ fromIntegral r / fromIntegral (maxBound :: CInt)
@@ -417,8 +415,8 @@ evalMCLMC ::
 evalMCLMC (MCLMC hmc) obs = proc x -> do
   (s, hmc') <- hmc -< ((), MCLMCState (Joint x (dconst obs)) Nothing)
   case hmc' ^. hmcLP of
-    Just l -> returnA -< (s,l)
-    Nothing -> returnA -< (s,auto 0)
+    Just l -> returnA -< (s, l)
+    Nothing -> returnA -< (s, auto 0)
 
 applyBounce :: (JanusTyped e a, CmdRange m e, CmdStorable m e a, CmdRef m e, Floating (e a)) => e a -> e (Ptr a) -> Int -> m (e a) -> m ()
 applyBounce nu mom n randn' = do
@@ -438,18 +436,28 @@ fillNormal :: (JanusTyped e a, CmdRef m e, CmdRand m e a, CmdStorable m e a, Cmd
 fillNormal p n = rangeM 0 n $ \i ->
   randn >>= flip (pokeElemOff p) i
 
-fillSphere
-  :: (JanusTyped e a, CmdRange m e, CmdRef m e, CmdWhile m e,
-      ExpOrd e Int64, CmdRand m e a, Floating (e a),
-      CmdFormat m e a, CmdStorable m e a, Num (e Int64)) =>
-     e (Ptr a) -> e Int64 -> m ()
+fillSphere ::
+  ( JanusTyped e a,
+    CmdRange m e,
+    CmdRef m e,
+    CmdWhile m e,
+    ExpOrd e Int64,
+    CmdRand m e a,
+    Floating (e a),
+    CmdFormat m e a,
+    CmdStorable m e a,
+    Num (e Int64)
+  ) =>
+  e (Ptr a) ->
+  e Int64 ->
+  m ()
 fillSphere mom n = do
   nm <- newRef 0
   rangeM 0 n $ \_ -> do
     ui <- randn
-    modifyRef nm (+ (ui*ui))
+    modifyRef nm (+ (ui * ui))
   nm' <- readRef nm >>= letM . sqrt
-  rangeM 0 n $ \i -> peekElemOff mom i >>= \ui -> pokeElemOff mom (ui/nm') i
+  rangeM 0 n $ \i -> peekElemOff mom i >>= \ui -> pokeElemOff mom (ui / nm') i
 
 data Prior e a f = Prior
   deriving (Generic)
@@ -613,23 +621,23 @@ runTwoSampleModel x y = case someNatVal (toInteger $ VS.length x) of
       let mkPTensor p ptr = PrimalT $ Tensor (TensorBoundCons p TensorBoundNil) ptr
           n = flatSize $ Proxy @(TwoSamplePrior Identity Double (Primal Identity Double))
           floatsz = fromIntegral (runIdentity $ sizeOf (Proxy @Float))
-        in allocaBytes (n*floatsz) $ \mom -> do
-          virvec <- VM.generate 2048 (const 0)
-          VM.unsafeWith virvec $ \vir ->
-            withJanusC (\x'' y'' -> tune @JanusCM @JanusC twoSampleModel $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
-              k x' y' mom vir
-          virvec' <- VS.unsafeFreeze virvec
-          case tuneNoiseLengthScale (VS.map float2Double virvec') of
-            Nothing -> error "Insufficient trajectory length for virial to decorrelate!"
-            Just len -> withJanusC (\x'' y'' -> sample @JanusCM @JanusC twoSampleModel $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
-              let nu = 1 / sqrt (fromIntegral $ n * len)
-              in k x' y' mom nu
+       in allocaBytes (n * floatsz) $ \mom -> do
+            virvec <- VM.generate 2048 (const 0)
+            VM.unsafeWith virvec $ \vir ->
+              withJanusC (\x'' y'' -> tune @JanusCM @JanusC twoSampleModel $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
+                k x' y' mom vir
+            virvec' <- VS.unsafeFreeze virvec
+            case tuneNoiseLengthScale (VS.map realToFrac virvec') of
+              Nothing -> error "Insufficient trajectory length for virial to decorrelate!"
+              Just len -> withJanusC (\x'' y'' -> sample @JanusCM @JanusC twoSampleModel $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
+                let nu = 1 / sqrt (fromIntegral $ n * len)
+                 in k x' y' mom nu
     Nothing -> error "VS.length returned a negative value!"
   Nothing -> error "VS.length returned a negative value!"
 
 men, women :: VS.Vector Float
-men = VS.fromList [13.3,6.0,20.0,8.0,14.0,19.0,18.0,25.0,16.0,24.0,15.0,1.0,15.0]
-women = VS.fromList [22.0,16.0,21.7,21.0,30.0,26.0,12.0,23.2,28.0,23.0]
+men = VS.fromList [13.3, 6.0, 20.0, 8.0, 14.0, 19.0, 18.0, 25.0, 16.0, 24.0, 15.0, 1.0, 15.0]
+women = VS.fromList [22.0, 16.0, 21.7, 21.0, 30.0, 26.0, 12.0, 23.2, 28.0, 23.0]
 
 data PCGState m e = PCGState
   { pcgState :: Ref m e Word64,
