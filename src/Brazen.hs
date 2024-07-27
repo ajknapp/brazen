@@ -42,6 +42,7 @@ import Data.Word
 import Foreign (Ptr)
 import Foreign.C
 import Foreign.Marshal.Alloc
+import GHC.Float
 import GHC.Generics
 import GHC.TypeLits
 import Janus.Command.Array
@@ -618,7 +619,7 @@ runTwoSampleModel x y = case someNatVal (toInteger $ VS.length x) of
             withJanusC (\x'' y'' -> tune @JanusCM @JanusC twoSampleModel $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
               k x' y' mom vir
           virvec' <- VS.unsafeFreeze virvec
-          tuneNoiseLengthScale virvec' >>= \case
+          case tuneNoiseLengthScale (VS.map float2Double virvec') of
             Nothing -> error "Insufficient trajectory length for virial to decorrelate!"
             Just len -> withJanusC (\x'' y'' -> sample @JanusCM @JanusC twoSampleModel $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
               let nu = 1 / sqrt (fromIntegral $ n * len)

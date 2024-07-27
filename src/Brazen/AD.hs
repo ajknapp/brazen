@@ -10,12 +10,12 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 
 module Brazen.AD where
 
@@ -39,7 +39,6 @@ import GHC.Float
 import GHC.Generics
 import GHC.TypeLits
 import Janus.Command.Array
--- import Janus.Command.Format
 import Janus.Command.Range
 import Janus.Command.Ref
 import Janus.Command.While
@@ -65,6 +64,9 @@ data Tape e a = Tape {tapePrimal, tapeDual :: e (Ptr a)}
 newtype RAD m e c a b = RAD
   { runAD :: State Int (Kleisli (ReaderT (Tape e c) (Codensity m)) a b)
   }
+  deriving
+    (Functor, Applicative)
+    via StaticMonadArrow (State Int) (Kleisli (ReaderT (Tape e c) (Codensity m))) a
   deriving
     (Category, Arrow, ArrowChoice)
     via StaticMonadArrow (State Int) (Kleisli (ReaderT (Tape e c) (Codensity m)))
@@ -354,14 +356,14 @@ withGrad (RAD f) k = do
   let tape' = Tape tape dtape
   k tape' (unpack tape) $ do
     rangeM 0 (fromIntegral n) $ \i -> pokeElemOff dtape 0 i
-    (s,z) <- lowerCodensity $ reset $ do
+    (s, z) <- lowerCodensity $ reset $ do
       runReaderT (runKleisli f'' $ unpackTangent tape dtape) tape' >>= \case
-        (s, DVar (VConst e)) -> pure (s,e)
+        (s, DVar (VConst e)) -> pure (s, e)
         (s, DVar (VConst' e)) -> lift $ (s,) <$> peek e
         (s, DVar (VDyn z dz)) -> do
           z' <- lift $ peek z
           lift $ poke dz 1
-          pure (s,z')
+          pure (s, z')
     pure (z, unpack dtape, s)
   free (toVoidPtr tape)
   free (toVoidPtr dtape)
@@ -380,10 +382,10 @@ instance (GTangential f e a, GTangential g e a, GFlat f, Num (e Int64), ExpSized
 instance GTangential (K1 i (Primal e a (Var e a))) e a where
   gunpack p = K1 $ PrimalV p
 
-instance ReifyTensorBound sh => GTangential (K1 i (Primal e a (Tensor sh e a))) e a where
+instance (ReifyTensorBound sh) => GTangential (K1 i (Primal e a (Tensor sh e a))) e a where
   gunpack p = K1 $ PrimalT $ Tensor (tensorBound (Proxy @sh)) p
 
-instance GTangential f e a => GTangential (M1 c i f) e a where
+instance (GTangential f e a) => GTangential (M1 c i f) e a where
   gunpack p = M1 (gunpack p)
 
 unpackTangent ::
@@ -408,13 +410,14 @@ dconst =
         PrimalT t -> DTConst t
     )
 
-primalize :: FFunctor (f e a) => f e a (Dual e a) -> f e a (Primal e a)
-primalize = ffmap
-  ( \case
-      DVar (VDyn v _) -> PrimalV v
-      DTensor t _ -> PrimalT t
-      _ -> error "primalize: the impossible happened"
-  )
+primalize :: (FFunctor (f e a)) => f e a (Dual e a) -> f e a (Primal e a)
+primalize =
+  ffmap
+    ( \case
+        DVar (VDyn v _) -> PrimalV v
+        DTensor t _ -> PrimalT t
+        _ -> error "primalize: the impossible happened"
+    )
 
 --------------------------------------------------------------------------------
 
@@ -433,4 +436,4 @@ instance FRepeat (DingoDango e a) where frepeat = gfrepeat
 
 instance Flat (DingoDango e a (Primal e a))
 
-instance (Num (e Int64), ExpSized e a, ExpPtr e a) => Tangential DingoDango e a where
+instance (Num (e Int64), ExpSized e a, ExpPtr e a) => Tangential DingoDango e a

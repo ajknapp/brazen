@@ -1,33 +1,26 @@
 module Brazen.Tune where
 
+import Data.Complex
+import Data.Vector.FFT
 import qualified Data.Vector.Storable as VS
-import qualified Data.Vector.Storable.Mutable as VM
-import Foreign.C
-import Foreign.Ptr
+import qualified Data.Vector.Unboxed as VU
 
-foreign import ccall unsafe acfF :: Ptr Float -> Ptr Float -> CInt -> IO ()
+tuneNoiseLengthScale :: VS.Vector Double -> Maybe Int
+tuneNoiseLengthScale v = go 0
+  where
+    ac = autocorr (VU.convert v)
+    n = VS.length v
+    go i
+      | i >= n = Nothing
+      | ac VU.! i < 0 = Just i
+      | otherwise = go (i + 1)
 
-foreign import ccall unsafe acfD :: Ptr Double -> Ptr Double -> CInt -> IO ()
-
-class ACF a where
-  acf :: Ptr a -> Ptr a -> Int -> IO ()
-
-instance ACF Float where
-  acf x p n = acfF x p (fromIntegral n)
-
-instance ACF Double where
-  acf x p n = acfD x p (fromIntegral n)
-
-tuneNoiseLengthScale :: (VM.Storable a, Num a, Ord a, ACF a) => VS.Vector a -> IO (Maybe Int)
-tuneNoiseLengthScale v = do
-  let v' = v VS.++ VS.replicate n 0
-      n = VS.length v
-  VS.unsafeWith v' $ \x -> do
-    m <- VM.new (VS.length v')
-    VM.unsafeWith m $ \p -> acf x p (VS.length v')
-    m' <- VS.unsafeFreeze m
-    let go i
-          | i >= n = Nothing
-          | m' VS.! i < 0 = Just i
-          | otherwise = go (i + 1)
-    pure (go 0)
+autocorr :: VU.Vector Double -> VU.Vector Double
+autocorr v = VU.map (\vi -> realPart vi / fromIntegral n) $ VU.take n v''
+  where
+    n = VU.length v
+    vnorm = sqrt . VU.sum $ VU.map (\vi -> vi * vi) v
+    v' = VU.map (/ vnorm) v VU.++ VU.replicate n 0
+    u = fft (VU.map (:+ 0) v')
+    u' = VU.map (\ui -> conjugate ui * ui) u
+    v'' = ifft u'

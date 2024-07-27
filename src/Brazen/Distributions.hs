@@ -1,3 +1,4 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingVia #-}
@@ -43,6 +44,16 @@ $(makeLenses ''MCLMCState)
 
 newtype MCLMC m e s c a b = MCLMC {getHMC :: RAD m e c (a, MCLMCState s e c) (b, MCLMCState s e c)}
   deriving (Category, Arrow, ArrowChoice) via StateArrow (MCLMCState s e c) (RAD m e c)
+
+instance Functor (MCLMC m e s c a) where
+  fmap f (MCLMC a) = MCLMC $ a >>> first (arr f)
+
+instance Applicative (MCLMC m e s c a) where
+  pure a = MCLMC (first (pure a))
+  MCLMC f <*> MCLMC x = MCLMC $ f &&& arr fst
+    >>> arr (\((f',s),a) -> (f',(a,s)))
+    >>> second x
+    >>> arr (\(f',(x',s)) -> (f' x', s))
 
 type MCLMCModel m e f g a = MCLMC m e (Joint (f e a) (g e a) (Dual e a)) a () (Joint (f e a) (g e a) (Dual e a))
 

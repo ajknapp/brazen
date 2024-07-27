@@ -34,18 +34,16 @@
           , base
           , ad
           , arrows
-          , fftw
-          , fftwFloat
           , hkd
           , lens
           , linear
-          , STMonadTrans
           , tasty
           , tasty-discover
           , tasty-hedgehog
           , tasty-hunit
           , transformers
           , vector
+          , vector-fft
           }:
           mkDerivation {
             pname = packageName;
@@ -60,11 +58,11 @@
                 hkd
                 lens
                 linear
-                STMonadTrans
                 transformers
                 vector
+                vector-fft
               ];
-            librarySystemDepends = [ boost fftw fftwFloat gcc12 gcc12.cc.lib cudaPackages_12_3.cudatoolkit cudaPackages_12_3.libnvjitlink gcc12 linuxPackages.nvidia_x11 ];
+            librarySystemDepends = [ boost gcc12 gcc12.cc.lib cudaPackages_12_3.cudatoolkit cudaPackages_12_3.libnvjitlink gcc12 linuxPackages.nvidia_x11 ];
             testHaskellDepends = [ tasty tasty-discover tasty-hedgehog tasty-hunit ];
             description = "Fourier-tempered Hamiltonian Monte Carlo on the GPU.";
             license = "unknown";
@@ -89,7 +87,7 @@
           shellHook = ''
             export PATH=${pkgs.gcc12}/bin:$PATH
             export CUDA_PATH=${pkgs.cudaPackages_12_3.cudatoolkit}
-            export LD_LIBRARY_PATH=${pkgs.linuxPackages.nvidia_x11}/lib:${pkgs.cudaPackages_12_3.libnvjitlink}/lib:${pkgs.fftw}/lib:${pkgs.fftwFloat}/lib
+            export LD_LIBRARY_PATH=${pkgs.linuxPackages.nvidia_x11}/lib:${pkgs.cudaPackages_12_3.libnvjitlink}/lib
             export EXTRA_LDFLAGS="-L${pkgs.linuxPackages.nvidia_x11}/lib"
             export EXTRA_CCFLAGS="-I/usr/include"
           '';

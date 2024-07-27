@@ -63,7 +63,7 @@ library
 
     cxx-sources:      cbits/math.cpp
     cxx-options:      -O3 -march=native
-    extra-libraries:  fftw3 fftw3f stdc++
+    extra-libraries:  stdc++
 
     -- Modules exported by the library.
     exposed-modules:  Brazen
@@ -96,9 +96,9 @@ library
                     , mtl
                     , random
                     , reflection
-                    , STMonadTrans
                     , transformers
                     , vector
+                    , vector-fft
 
     -- Directories containing source files.
     hs-source-dirs:   src
