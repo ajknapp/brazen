@@ -63,6 +63,12 @@ opNAD ::
   RAD m e a (f (Dual e a (Var e a))) (Dual e a (Var e a))
 opNAD f = opN (\x -> let (y, dy) = AD.grad' f (fmap Dynamic x) in (runPartial y, \dz -> fmap (runPartial . (* Dynamic dz)) dy))
 
+opNMapSumAD ::
+  (Traversable f, Applicative f, CmdRAD m e a, ExpInject e a, Num a, Num (ADExp e a), Eq a, KnownNat n) =>
+  (forall s. (Reifies s AD.Tape) => f (AD.Reverse s (Partial e a)) -> AD.Reverse s (Partial e a)) ->
+  RAD m e a (f (Dual e a (Vector n e a))) (Dual e a (Var e a))
+opNMapSumAD f = opNMapSum (runPartial . fst . AD.grad' f . fmap Dynamic) (fmap runPartial . AD.grad f . fmap Dynamic)
+
 updateLP ::
   (CmdRAD m e a) =>
   RAD m e a (MCLMCState s e a, b, Dual e a (Var e a)) (b, MCLMCState s e a)
@@ -126,7 +132,7 @@ lognormal' l = MCLMC $ proc ((mu, sigma2), hmc) -> do
   updateLP -< (hmc, phi, lp)
 
 halfCauchyD :: (Floating a) => V2 a -> a
-halfCauchyD (V2 scale y) = log1pexp (2 * y) + log (0.5 * pi * scale) - y
+halfCauchyD (V2 scale y) = log1p (exp (2*y)/scale) + 0.5*log scale - y + log (0.5*pi)
 
 halfCauchy ::
   (CmdRAD m e a, Floating (ADExp e a), Eq a, Floating a, ExpInject e a) =>
@@ -137,6 +143,17 @@ halfCauchy l = MCLMC $ proc (scale, hmc) -> do
   lp <- opNAD halfCauchyD -< V2 scale theta
   (_, hmc') <- updateLP -< (hmc, theta, lp)
   phi <- expA -< theta
+  returnA -< (phi, hmc')
+
+halfCauchy' ::
+  (CmdRAD m e a, Floating (ADExp e a), Eq a, Floating a, ExpInject e a) =>
+  Getting (Dual e a (Var e a)) s (Dual e a (Var e a)) ->
+  MCLMC m e s a (Dual e a (Var e a)) (Dual e a (Var e a))
+halfCauchy' l = MCLMC $ proc (scale2, hmc) -> do
+  let theta = hmc ^. hmcState . l
+  lp <- opNAD halfCauchyD -< V2 (auto 1) theta
+  (_, hmc') <- updateLP -< (hmc, theta, lp)
+  phi <- opNAD (\(V2 s t) -> sqrt s*t) -< V2 scale2 theta
   returnA -< (phi, hmc')
 
 uniformT :: (Floating a) => V3 a -> a

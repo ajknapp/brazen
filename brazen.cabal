@@ -68,9 +68,13 @@ library
     -- Modules exported by the library.
     exposed-modules:  Brazen
                       Brazen.AD
+                      Brazen.Analysis
                       Brazen.Distributions
+                      Brazen.FieldNames
+                      Brazen.Gnuplot
                       Brazen.Numeric
                       Brazen.Partial
+                      Brazen.Pairrow
                       Brazen.Shared
                       Brazen.Tune
 
@@ -81,21 +85,30 @@ library
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.18
+    build-depends:    base ^>=4.19
                     , ad
                     , array
                     , arrows
+                    , blaze-html
+                    , blaze-markup
+                    , clay
                     , containers
                     , data-fix
                     , data-reify
+                    , directory
+                    , filepath
                     , janus
                     , kan-extensions
                     , hkd
                     , lens
                     , linear
                     , mtl
+                    , process
                     , random
                     , reflection
+                    , rock
+                    , temporary
+                    , text
                     , transformers
                     , vector
                     , vector-fft

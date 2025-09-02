@@ -50,6 +50,7 @@ import Linear
 import Prelude hiding (id, (.))
 
 data Primal e a b where
+  PrimalC :: e a -> Primal e a (Var e a)
   PrimalV :: e (Ptr a) -> Primal e a (Var e a)
   PrimalT :: Tensor ds e a -> Primal e a (Tensor ds e a)
 
@@ -337,7 +338,7 @@ instance (GFlat f, GFlat g) => GFlat (f :*: g) where
 instance (Flat a) => (GFlat (Rec0 a)) where
   gflatSize _ = flatSize (Proxy @a)
 
-withGrad ::
+withGradTape ::
   forall f m e s a.
   ( CmdRAD m e a,
     ExpPtrCast e,
@@ -345,15 +346,15 @@ withGrad ::
     FZip (f e a),
     JanusTyped e (Ptr a)
   ) =>
+  e (Ptr a) ->
+  e (Ptr a) ->
   RAD m e a (f e a (Dual e a)) (s, Dual e a (Var e a)) ->
   (Tape e a -> f e a (Primal e a) -> m (e a, f e a (Primal e a), s) -> m ()) ->
   m ()
-withGrad (RAD f) k = do
+withGradTape tape dtape (RAD f) k = do
   let m = flatSize (Proxy @(f e a (Primal e a)))
       (f'', n) = runState f m
-  tape <- malloc ((fromIntegral n :: e Int64) * sizeOf (Proxy @a)) >>= letM . fromVoidPtr
-  dtape <- malloc ((fromIntegral n :: e Int64) * sizeOf (Proxy @a)) >>= letM . fromVoidPtr
-  let tape' = Tape tape dtape
+      tape' = Tape tape dtape
   k tape' (unpack tape) $ do
     rangeM 0 (fromIntegral n) $ \i -> pokeElemOff dtape 0 i
     (s, z) <- lowerCodensity $ reset $ do
@@ -365,6 +366,24 @@ withGrad (RAD f) k = do
           lift $ poke dz 1
           pure (s, z')
     pure (z, unpack dtape, s)
+
+withGrad ::
+  forall f m e s a.
+  ( CmdRAD m e a,
+    ExpPtrCast e,
+    Tangential f e a,
+    FZip (f e a),
+    JanusTyped e (Ptr a)
+  ) =>
+  RAD m e a (f e a (Dual e a)) (s, Dual e a (Var e a)) ->
+  (Tape e a -> f e a (Primal e a) -> m (e a, f e a (Primal e a), s) -> m ()) ->
+  m ()
+withGrad f k = do
+  let m = flatSize (Proxy @(f e a (Primal e a)))
+      (_, n) = runState (runAD f) m
+  tape <- malloc ((fromIntegral n :: e Int64) * sizeOf (Proxy @a)) >>= letM . fromVoidPtr
+  dtape <- malloc ((fromIntegral n :: e Int64) * sizeOf (Proxy @a)) >>= letM . fromVoidPtr
+  withGradTape tape dtape f k
   free (toVoidPtr tape)
   free (toVoidPtr dtape)
 

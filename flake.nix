@@ -2,7 +2,7 @@
   description = "Microcanonical Hamiltonian Monte Carlo on the GPU.";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
     janus.url = "git+ssh://git@github.com:/ajknapp/janus.git";
     janus.inputs.flake-utils.follows = "flake-utils";
@@ -27,13 +27,16 @@
           { mkDerivation
           , stdenv
           , lib
-          , gcc12
+          , gcc
           , boost
-          , cudaPackages_12_3
+          , cudaPackages
           , linuxPackages
           , base
           , ad
           , arrows
+          , blaze-html
+          , clay
+          , gnuplot_bin
           , hkd
           , lens
           , linear
@@ -41,6 +44,7 @@
           , tasty-discover
           , tasty-hedgehog
           , tasty-hunit
+          , temporary
           , transformers
           , vector
           , vector-fft
@@ -54,22 +58,29 @@
                 base
                 ad
                 arrows
-                janus-pkg
+                blaze-html
+                clay
                 hkd
+                janus-pkg
                 lens
                 linear
+                temporary
                 transformers
                 vector
                 vector-fft
               ];
-            librarySystemDepends = [ boost gcc12 gcc12.cc.lib cudaPackages_12_3.cudatoolkit cudaPackages_12_3.libnvjitlink gcc12 linuxPackages.nvidia_x11 ];
+            librarySystemDepends = [ boost gcc gcc.cc.lib cudaPackages.cudatoolkit cudaPackages.libnvjitlink gcc gnuplot_bin linuxPackages.nvidia_x11 ];
             testHaskellDepends = [ tasty tasty-discover tasty-hedgehog tasty-hunit ];
             description = "Microcanonical Hamiltonian Monte Carlo on the GPU.";
             license = "unknown";
             hydraPlatforms = lib.platforms.none;
           };
 
-        pkg = haskellPackages.callPackage derivation {};
+        pkg = (haskellPackages.override {
+          overrides = self: super: rec {
+            gnuplot_bin = pkgs.gnuplot;
+          };
+        }).callPackage derivation {};
 
       in {
         packages.${packageName} = pkg;
@@ -85,9 +96,9 @@
             ghcid
           ];
           shellHook = ''
-            export PATH=${pkgs.gcc12}/bin:$PATH
-            export CUDA_PATH=${pkgs.cudaPackages_12_3.cudatoolkit}
-            export LD_LIBRARY_PATH=${pkgs.linuxPackages.nvidia_x11}/lib:${pkgs.cudaPackages_12_3.libnvjitlink}/lib
+            export PATH=${pkgs.gcc}/bin:$PATH
+            export CUDA_PATH=${pkgs.cudaPackages.cudatoolkit}
+            export LD_LIBRARY_PATH=${pkgs.linuxPackages.nvidia_x11}/lib:${pkgs.cudaPackages.libnvjitlink.lib}/lib
             export EXTRA_LDFLAGS="-L${pkgs.linuxPackages.nvidia_x11}/lib"
             export EXTRA_CCFLAGS="-I/usr/include"
           '';

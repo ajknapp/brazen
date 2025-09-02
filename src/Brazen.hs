@@ -26,12 +26,14 @@ module Brazen where
 
 import Brazen.AD
 import Brazen.Distributions
+import Brazen.FieldNames
 import Brazen.Shared
 import Brazen.Tune
 import Control.Arrow
 import Control.Category
 import Control.Lens
 import Control.Monad
+import Control.Monad.State
 import Data.Functor.Product
 import Data.HKD
 import Data.Int
@@ -57,6 +59,7 @@ import Janus.Expression.Bool
 import Janus.Expression.Cast
 import Janus.Expression.Inject
 import Janus.Expression.Ord
+import Janus.FFI.Arg
 import Janus.Typed
 import Prelude hiding (id, (.))
 
@@ -159,24 +162,32 @@ minimalNormStep tape dtape mom n grad eps = do
   _ <- updateMomentum dtape mom epslam n
   pure res
 
-data Foo e a f = Foo {_fooA, _fooB :: f (Var e a)}
-  deriving (Generic)
-
-$(makeLenses ''Foo)
-
-deriving instance (Show (f (Var e a))) => Show (Foo e a f)
-
-instance FFunctor (Foo e a) where ffmap = ffmapDefault
-
-instance FFoldable (Foo e a) where ffoldMap = ffoldMapDefault
-
-instance FTraversable (Foo e a) where ftraverse = gftraverse
-
-instance FZip (Foo e a) where fzipWith = gfzipWith
-
-instance FRepeat (Foo e a) where frepeat = gfrepeat
-
-instance Flat (Foo e a (Primal e a))
+leapfrogStep ::
+  ( JanusTyped e a,
+    JanusTyped e Int64,
+    CmdRange m e,
+    CmdRef m e,
+    CmdWhile m e,
+    ExpOrd e Int64,
+    CmdStorable m e a,
+    CmdFormat m e a,
+    Floating (e a),
+    Num (e Int64)
+  ) =>
+  e (Ptr a) ->
+  e (Ptr a) ->
+  e (Ptr a) ->
+  Int ->
+  m b ->
+  e a ->
+  m b
+leapfrogStep tape dtape mom n grad eps = do
+  halfeps <- letM $ 0.5 * eps
+  _ <- updateMomentum dtape mom halfeps n
+  updatePosition tape mom halfeps n
+  res <- grad
+  _ <- updateMomentum dtape mom halfeps n
+  pure res
 
 openSampleFiles ::
   (Applicative m, CmdIO m e, CmdString m e, FTraversable f) =>
@@ -267,6 +278,7 @@ writeSamples fps samples = ftraverse_ writeSamples' (fzipWith Pair fps samples)
       ) =>
       Product (Const (e (Ptr CFile))) (Primal e a) b ->
       m ()
+    writeSamples' (Pair (Const fp) (PrimalC v)) = hformat fp v "\n"
     writeSamples' (Pair (Const fp) (PrimalV v)) = peek v >>= \v' -> hformat fp v' "\n"
     writeSamples' (Pair (Const fp) (PrimalT t)) = do
       let Tensor bds _ = t
@@ -282,9 +294,6 @@ closeSampleFiles = ftraverse_ (\(Const fp) -> fclose fp)
 
 ptrProxy :: e (Ptr a) -> Proxy a
 ptrProxy _ = Proxy
-
-instance (ExpSized e a, ExpPtr e a) => Tangential Foo e a where
-  unpack tape = Foo (PrimalV tape) (PrimalV $ tape `ptrAdd` sizeOf (ptrProxy tape))
 
 data MCLMCState' e a = HMCState'
   { _hmcPos, _hmcMom :: e (Ptr a),
@@ -304,7 +313,7 @@ instance (Fractional a) => CmdRand IO Identity a where
 instance (ExpFloatingCast JanusC CInt a, Fractional (JanusC a)) => CmdRand JanusCM JanusC a where
   randf = do
     let crand :: JanusCM (JanusC CInt)
-        crand = janusCFFICall (Just "stdint.h") "rand"
+        crand = janusCFFICall (Just "stdlib.h") "rand"
     r <- crand
     pure $ toFloating r / (fromIntegral (maxBound :: CInt) :: JanusC a)
 
@@ -312,7 +321,7 @@ randn :: forall m e a. (JanusTyped e a, CmdRef m e, CmdRand m e a, Floating (e a
 randn = do
   u1 <- randf
   u2 <- randf
-  letM @_ @e $ sqrt (-2 * log u1) * cos (2 * pi * u2)
+  letM @_ @e $ sqrt (- (2 * log u1)) * cos (2 * pi * u2)
 
 virial ::
   ( JanusTyped e a,
@@ -343,69 +352,6 @@ virial x u g n = do
     modifyRef t3 (+ (ui' * gi'))
   (t1', t2', t3') <- (,,) <$> readRef t1 <*> readRef t2 <*> readRef t3
   letM $ 1 - (t1' - t2' * t3') / toFloating (n - 1)
-
-data FieldName e a where
-  FieldVar :: String -> FieldName e (Var e a)
-  FieldTensor :: String -> TensorBound sh e -> FieldName e (Tensor sh e a)
-
-deriving instance Show (FieldName e a)
-
-fieldName :: FieldName e a -> String
-fieldName (FieldVar s) = s
-fieldName (FieldTensor s _) = s
-
-class GFieldNames f where
-  gfieldNames :: String -> Proxy (f a) -> f a
-
-instance (GFieldNames f, GFieldNames g) => GFieldNames (f :*: g) where
-  gfieldNames prefix _ = gfieldNames prefix Proxy :*: gfieldNames prefix Proxy
-
-instance (FFunctor f, FieldNames e f) => GFieldNames (K1 i (f (FieldName e))) where
-  gfieldNames prefix _ =
-    K1 $
-      ffmap
-        ( \case
-            FieldVar s -> FieldVar (prepend s)
-            FieldTensor s t -> FieldTensor (prepend s) t
-        )
-        (fieldNames :: f (FieldName e))
-    where
-      prepend s = prefix <> "_" <> s
-
-instance GFieldNames (K1 i (FieldName e (Var e a))) where
-  gfieldNames prefix _ = K1 $ FieldVar prefix
-
-instance (ReifyTensorBound sh) => GFieldNames (K1 i (FieldName e (Tensor sh e a))) where
-  gfieldNames prefix _ = K1 $ FieldTensor prefix (tensorBound (Proxy @sh))
-
-instance (GFieldNames f) => GFieldNames (D1 i f) where
-  gfieldNames prefix _ = M1 $ gfieldNames prefix Proxy
-
-instance (GFieldNames f) => GFieldNames (C1 i f) where
-  gfieldNames prefix _ = M1 $ gfieldNames prefix Proxy
-
-instance (KnownSymbol n, GFieldNames f) => GFieldNames (S1 ('MetaSel ('Just n) u s d) f) where
-  gfieldNames prefix p = M1 $ gfieldNames (prefix <> fname) (p' p)
-    where
-      p' :: Proxy (S1 i f a) -> Proxy (f a)
-      p' _ = Proxy
-      fname = case symbolVal (Proxy @n) of
-        '_' : xs -> xs
-        xs -> xs
-
-class FieldNames e f where
-  fieldNames :: f (FieldName e)
-  default fieldNames :: (Generic (f (FieldName e)), GFieldNames (Rep (f (FieldName e)))) => f (FieldName e)
-  fieldNames = GHC.Generics.to $ gfieldNames "" (Proxy @(Rep (f (FieldName e)) ()))
-
-instance FieldNames e (Foo e a)
-
-data Barf e a f = Barf {_barf1, _barf2 :: Foo e a f}
-  deriving (Generic)
-
-deriving instance (Show (f (Var e a))) => Show (Barf e a f)
-
-instance FieldNames e (Barf e a)
 
 evalMCLMC ::
   (FFunctor (g e a), Num (e a)) =>
@@ -459,14 +405,18 @@ fillSphere mom n = do
   nm' <- readRef nm >>= letM . sqrt
   rangeM 0 n $ \i -> peekElemOff mom i >>= \ui -> pokeElemOff mom (ui / nm') i
 
-data Prior e a f = Prior
+data HUnit e a f = HUnit
   deriving (Generic)
 
-instance FFunctor (Prior e a) where ffmap = ffmapDefault
+instance FFunctor (HUnit e a) where ffmap = ffmapDefault
 
-instance FFoldable (Prior e a) where ffoldMap = ffoldMapDefault
+instance FFoldable (HUnit e a) where ffoldMap = ffoldMapDefault
 
-instance FTraversable (Prior e a) where ftraverse = gftraverse
+instance FTraversable (HUnit e a) where ftraverse = gftraverse
+
+instance FZip (HUnit e a) where fzipWith = gfzipWith
+
+instance FieldNames e (HUnit e a) where fieldNames = HUnit
 
 tune ::
   forall m e a f g.
@@ -488,31 +438,36 @@ tune ::
     JanusTyped e Bool,
     JanusTyped e (Ptr a)
   ) =>
+  e (Ptr a) ->
+  e (Ptr a) ->
   MCLMCModel m e f g a ->
   g e a (Primal e a) ->
   e (Ptr a) ->
   e (Ptr a) ->
   m ()
-tune hmc obs mom vir = do
+tune tape dtape hmc obs mom vir = do
   let eps = 1e-2
       n = flatSize $ Proxy @(f e a (Primal e a))
-  withGrad @_ @m @e @_ @a (evalMCLMC hmc obs) $ \tape _ grad -> do
-    let Tape tape' dtape' = tape
+  withGradTape @_ @m @e @_ @a tape dtape (evalMCLMC hmc obs) $ \_ _ grad -> do
     fillSphere mom (fromIntegral n)
-    fillNormal tape' (fromIntegral n)
+    fillNormal tape (fromIntegral n)
     _ <- grad
-    rangeM 0 2048 $ \i -> do
-      (_, _, _) <- minimalNormStep tape' dtape' mom n grad eps
-      v <- virial tape' mom dtape' (fromIntegral n)
+    rangeM 0 4096 $ \i -> do
+      (_, _, _) <- minimalNormStep tape dtape mom n grad eps
+      v <- virial tape mom dtape (fromIntegral n)
       pokeElemOff vir v i
 
+-- assumes warm start from tune being called previously so tape and dtape have reasonable values
 sample ::
-  forall m e a f g.
+  forall m e a f g h.
   ( FTraversable (f e a),
+    FTraversable (h e a),
     FZip (f e a),
+    FZip (h e a),
     Tangential f e a,
     FFunctor (g e a),
     FieldNames e (f e a),
+    FieldNames e (h e a),
     CmdRAD m e a,
     CmdRand m e a,
     ExpPtrCast e,
@@ -526,17 +481,23 @@ sample ::
     JanusTyped e Bool,
     JanusTyped e (Ptr a)
   ) =>
+  e (Ptr a) ->
+  e (Ptr a) ->
   MCLMCModel m e f g a ->
+  (Joint (f e a) (g e a) (Primal e a) -> m (h e a (Primal e a))) ->
   g e a (Primal e a) ->
   e (Ptr a) ->
   e a ->
   m ()
-sample hmc obs mom nu = do
+sample tape dtape hmc gen obs mom nu = do
   let eps = 1e-2
       n = flatSize $ Proxy @(f e a (Primal e a))
       fn = fieldNames @e @(f e a)
+      hn = fieldNames @e @(h e a)
   fps <- openSampleFiles fn
+  hps <- openSampleFiles hn
   writeSampleHeaders fps fn
+  writeSampleHeaders hps hn
   fv <- withString "virial.csv" $ \file ->
     withString "w" $ \mode -> do
       fv' <- fopen file mode
@@ -545,16 +506,14 @@ sample hmc obs mom nu = do
   ivirial <- newRef 0
   trajLen <- newRef (0 :: e Int64)
   fillSphere mom (fromIntegral n)
-  withGrad @_ @m @e @_ @a (evalMCLMC hmc obs) $ \tape _ grad -> do
-    let Tape tape' dtape' = tape
-    fillSphere tape' (fromIntegral n)
-    fillNormal tape' (fromIntegral n)
-    _ <- grad
+  withGradTape @_ @m @e @_ @a tape dtape (evalMCLMC hmc obs) $ \_ _ grad -> do
     rangeM (0 :: e Int64) 1000000 $ \_ -> do
-      (_, _, x) <- minimalNormStep tape' dtape' mom n grad eps
+      (_, _, x) <- minimalNormStep tape dtape mom n grad eps
       applyBounce nu mom n randn
       writeSamples fps (primalize $ x ^. parameters)
-      v <- virial tape' mom dtape' (fromIntegral n)
+      let primal (Joint f g) = Joint (primalize f) (primalize g)
+      gen (primal x) >>= writeSamples hps
+      v <- virial tape mom dtape (fromIntegral n)
       modifyRef ivirial (+ v)
       iv <- readRef ivirial
       trajLen' <- readRef trajLen
@@ -563,14 +522,9 @@ sample hmc obs mom nu = do
       writeRef ivirial 0
       writeRef trajLen 0
   closeSampleFiles fps
+  closeSampleFiles hps
   _ <- fclose fv
   pure ()
-
-simpleModel :: (CmdRAD m e a, ExpInject e a, Floating (ADExp e a), Eq a, Floating a) => MCLMCModel m e Foo Prior a
-simpleModel = proc _ -> do
-  a <- normal (parameters . fooA) -< (auto 0, auto 1)
-  b <- normal (parameters . fooB) -< (auto 0, auto 1)
-  returnA -< Joint (Foo a b) Prior
 
 data TwoSamplePrior e a f = TwoSamplePrior {_mu1, _mu2, _sigma21, _sigma22 :: f (Var e a)}
   deriving (Generic)
@@ -602,6 +556,23 @@ instance FFoldable (TwoSampleLikelihood n m e a) where ffoldMap = ffoldMapDefaul
 
 instance FTraversable (TwoSampleLikelihood n m e a) where ftraverse = gftraverse
 
+data TwoSampleGen e a f = TwoSampleGen {_sigma1 :: f (Var e a), _sigma2 :: f (Var e a), _twoSampleMeanDiff :: f (Var e a), _twoSampleEffectSize :: f (Var e a)}
+  deriving (Generic)
+
+$(makeLenses ''TwoSampleGen)
+
+instance FFunctor (TwoSampleGen e a) where ffmap = ffmapDefault
+
+instance FFoldable (TwoSampleGen e a) where ffoldMap = ffoldMapDefault
+
+instance FTraversable (TwoSampleGen e a) where ftraverse = gftraverse
+
+instance FZip (TwoSampleGen e a) where fzipWith = gfzipWith
+
+instance Flat (TwoSampleGen e a (Primal e a))
+
+instance FieldNames e (TwoSampleGen e a)
+
 twoSampleModel ::
   (CmdRAD m e a, ExpInject e a, Eq a, Floating (ADExp e a), Floating a, KnownNat n1, KnownNat n2) =>
   MCLMCModel m e TwoSamplePrior (TwoSampleLikelihood n1 n2) a
@@ -614,24 +585,63 @@ twoSampleModel = proc _ -> do
   x2 <- iidNormal (observations . obsGroup2) -< (m2, s2)
   returnA -< Joint (TwoSamplePrior m1 m2 s1 s2) (TwoSampleLikelihood x1 x2)
 
-runTwoSampleModel :: VS.Vector Float -> VS.Vector Float -> IO ()
+twoSampleGen ::
+  (CmdRAD m e a, Floating (e a)) =>
+  Joint (TwoSamplePrior e a) (TwoSampleLikelihood n1 n2 e a) (Primal e a) -> m (TwoSampleGen e a (Primal e a))
+twoSampleGen x = do
+  let PrimalV m1 = x ^. parameters . mu1
+      PrimalV m2 = x ^. parameters . mu2
+      PrimalV s21 = x ^. parameters . sigma21
+      PrimalV s22 = x ^. parameters . sigma22
+  m1' <- peek m1
+  m2' <- peek m2
+  s21' <- peek s21
+  s1 <- letM $ sqrt s21'
+  s22' <- peek s22
+  s2 <- letM $ sqrt s22'
+  meanDiff <- letM $ m1' - m2'
+  effSize <- letM $ meanDiff / sqrt (0.5 * (s21' + s22'))
+  pure $ TwoSampleGen { _sigma1 = PrimalC s1, _sigma2 = PrimalC s2, _twoSampleMeanDiff = PrimalC meanDiff, _twoSampleEffectSize = PrimalC effSize }
+
+specializeModel :: Proxy a -> MCLMCModel m e f g a -> MCLMCModel m e f g a
+specializeModel _ x = x
+
+runTwoSampleModel ::
+  forall a.
+  ( VM.Storable a,
+    Eq a,
+    Floating a,
+    Real a,
+    JanusLitC a,
+    JanusCTyped a,
+    FFIArg a,
+    ExpFloatingCast JanusC CInt a,
+    ExpFloatingCast JanusC Int64 a,
+    Floating (JanusC a),
+    CmdFormat JanusCM JanusC a
+  ) =>
+  VS.Vector a ->
+  VS.Vector a ->
+  IO ()
 runTwoSampleModel x y = case someNatVal (toInteger $ VS.length x) of
   Just (SomeNat px) -> case someNatVal (toInteger $ VS.length y) of
     Just (SomeNat py) -> VS.unsafeWith x $ \x' -> VS.unsafeWith y $ \y' ->
       let mkPTensor p ptr = PrimalT $ Tensor (TensorBoundCons p TensorBoundNil) ptr
-          n = flatSize $ Proxy @(TwoSamplePrior Identity Double (Primal Identity Double))
-          floatsz = fromIntegral (runIdentity $ sizeOf (Proxy @Float))
-       in allocaBytes (n * floatsz) $ \mom -> do
-            virvec <- VM.generate 2048 (const 0)
+          n = flatSize $ Proxy @(TwoSamplePrior Identity a (Primal Identity a))
+          floatsize = fromIntegral (runIdentity $ sizeOf (Proxy @a))
+          twoSampleModel' = specializeModel (Proxy @a) twoSampleModel
+          tapesize = execState (runAD $ getHMC twoSampleModel') n
+       in allocaBytes (tapesize * floatsize) $ \tape -> allocaBytes (tapesize * floatsize) $ \dtape -> allocaBytes (n * floatsize) $ \mom -> do
+            virvec <- VM.generate 4096 (const 0)
             VM.unsafeWith virvec $ \vir ->
-              withJanusC (\x'' y'' -> tune @JanusCM @JanusC twoSampleModel $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
-                k x' y' mom vir
+              withJanusC (\tape' dtape' x'' y'' -> tune @JanusCM @JanusC tape' dtape' twoSampleModel' $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
+                k tape dtape x' y' mom vir
             virvec' <- VS.unsafeFreeze virvec
             case tuneNoiseLengthScale (VS.map realToFrac virvec') of
               Nothing -> error "Insufficient trajectory length for virial to decorrelate!"
-              Just len -> withJanusC (\x'' y'' -> sample @JanusCM @JanusC twoSampleModel $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
+              Just len -> withJanusC (\tape' dtape' x'' y'' -> sample @JanusCM @JanusC tape' dtape' twoSampleModel' twoSampleGen (TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y''))) $ \k ->
                 let nu = 1 / sqrt (fromIntegral $ n * len)
-                 in k x' y' mom nu
+                 in k tape dtape x' y' mom nu
     Nothing -> error "VS.length returned a negative value!"
   Nothing -> error "VS.length returned a negative value!"
 

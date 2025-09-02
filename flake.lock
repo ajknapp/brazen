@@ -28,11 +28,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1720935285,
-        "narHash": "sha256-KZkoomSyNaw5o52tyjI4m6HuRjpv1PQZZ+ZNgHYCNyA=",
+        "lastModified": 1752275781,
+        "narHash": "sha256-lCyEI9QXKlMJ0xv4So6GOLqSA2M6JoKuTpvQR/oUhyk=",
         "ref": "refs/heads/master",
-        "rev": "98dfdc0578901c99ca6e353f27acedda335280f4",
-        "revCount": 19,
+        "rev": "4949ac1a954444a248a91b80d4a7f28a411a6fb0",
+        "revCount": 20,
         "type": "git",
         "url": "ssh://git@github.com:/ajknapp/janus.git"
       },
@@ -43,16 +43,16 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1720691131,
-        "narHash": "sha256-CWT+KN8aTPyMIx8P303gsVxUnkinIz0a/Cmasz1jyIM=",
+        "lastModified": 1751943650,
+        "narHash": "sha256-7orTnNqkGGru8Je6Un6mq1T8YVVU/O5kyW4+f9C1mZQ=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "a046c1202e11b62cbede5385ba64908feb7bfac4",
+        "rev": "88983d4b665fb491861005137ce2b11a9f89f203",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
-        "ref": "nixos-24.05",
+        "ref": "nixos-25.05",
         "repo": "nixpkgs",
         "type": "github"
       }
