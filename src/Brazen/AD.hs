@@ -425,6 +425,7 @@ dconst :: (FFunctor (f e a)) => f e a (Primal e a) -> f e a (Dual e a)
 dconst =
   ffmap
     ( \case
+        PrimalC e -> DVar (VConst e)
         PrimalV e -> DVar (VConst' e)
         PrimalT t -> DTConst t
     )
