@@ -122,7 +122,9 @@ type CmdRAD m e a =
     CmdMem m e,
     Num (e a),
     Num (ADExp e a),
-    Monad m
+    Monad m,
+    JanusTyped e (Ptr a),
+    CmdRef m e
   )
 
 adSize :: RAD m e c a b -> Int
@@ -276,13 +278,14 @@ readDTensorPrimal (DTBroadcast (DVar (VConst' x))) _ = peek x
 readDTensorPrimal (DTBroadcast (DVar (VDyn x _))) _ = peek x
 readDTensorPrimal (DTConst x) idx = readTensor x idx
 
-destination :: forall m e a. (ExpPtr e a, Num (e Int64), ExpSized e a) => Int -> ReaderT (Tape e a) (Codensity m) (e (Ptr a), e (Ptr a))
+destination :: forall m e a. (CmdRAD m e a) => Int -> ReaderT (Tape e a) (Codensity m) (e (Ptr a), e (Ptr a))
 destination idx = do
   Tape t dt <- ask
   let inc = flip ptrIndex (fromIntegral idx)
-  pure (inc t, inc dt)
+      incM = lift . lift . letM . inc
+  (,) <$> incM t <*> incM dt
 
-destinationVector :: forall m e a n. (ExpPtr e a, Num (e Int64), ExpSized e a, KnownNat n) => Int -> ReaderT (Tape e a) (Codensity m) (Vector n e a, Vector n e a)
+destinationVector :: forall m e a n. (CmdRAD m e a, KnownNat n) => Int -> ReaderT (Tape e a) (Codensity m) (Vector n e a, Vector n e a)
 destinationVector idx = do
   let bds = TensorBoundCons (Proxy @n) TensorBoundNil
   (t, dt) <- destination idx

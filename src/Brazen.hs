@@ -59,10 +59,12 @@ import Janus.Expression.Bool
 import Janus.Expression.Cast
 import Janus.Expression.Eq
 import Janus.Expression.Inject
+import Janus.Expression.Integral
 import Janus.Expression.Ord
 import Janus.FFI.Arg
 import Janus.Typed
 import Prelude hiding (id, (.))
+import Janus.Expression.Cond (branchFreeCond)
 
 updatePosition ::
   ( JanusTyped e a,
@@ -123,7 +125,7 @@ updateMomentum g u eps n = do
     uk <- peekElemOff u k
     uk' <- letM $ negate gk * (1 - zeta) * (1 + zeta + ue * (1 - zeta)) / gnorm' + 2 * zeta * uk
     pokeElemOff u uk' k
-    modifyRef norm' (+ uk' * uk')
+    modifyRef norm' (+ (uk' * uk'))
   norm2' <- readRef norm'
   norm'' <- letM $ sqrt norm2'
   rangeM 0 (fromIntegral n) $ \k -> do
@@ -307,18 +309,20 @@ class (Fractional (e a), Monad m) => CmdRand m e a where
   randf :: m (e a)
 
 foreign import ccall "rand" c_rand :: IO CInt
+foreign import ccall "srand" c_srand :: CUInt -> IO ()
 
 instance (Fractional a) => CmdRand IO Identity a where
   randf = do
     r <- c_rand
     pure $ fromIntegral r / fromIntegral (maxBound :: CInt)
 
-instance (ExpFloatingCast JanusC CInt a, Fractional (JanusC a)) => CmdRand JanusCM JanusC a where
+instance (ExpBoolCast JanusC a, ExpEq JanusC a, ExpFloatingCast JanusC CInt a, Fractional (JanusC a), JanusCTyped a) => CmdRand JanusCM JanusC a where
   randf = do
     let crand :: JanusCM (JanusC CInt)
         crand = janusCFFICall (Just "stdlib.h") "rand"
     r <- crand
-    pure $ toFloating r / (fromIntegral (maxBound :: CInt) :: JanusC a)
+    f <- letM $ toFloating r / (fromIntegral (maxBound :: CInt) :: JanusC a)
+    letM $ branchFreeCond (f `eq` 0) 1.0842022e-19 f
 
 randn :: forall m e a. (JanusTyped e a, CmdRef m e, CmdRand m e a, Floating (e a)) => m (e a)
 randn = do
@@ -483,6 +487,7 @@ sample ::
     CmdRAD m e a,
     CmdRand m e a,
     ExpFloatingCast e Int64 a,
+    ExpIntegral e Int64,
     ExpOrd e a,
     ExpPtrCast e,
     Floating (e a),
@@ -494,19 +499,20 @@ sample ::
     JanusTyped e Bool,
     JanusTyped e (Ptr a)
   ) =>
-  e (Ptr a) ->
-  e (Ptr a) ->
   MCLMCModel m e f g a ->
   (Joint (f e a) (g e a) (Primal e a) -> m (h e a (Primal e a))) ->
   g e a (Primal e a) ->
   e (Ptr a) ->
   e (Ptr a) ->
   e (Ptr a) ->
+  e (Ptr a) ->
+  e (Ptr a) ->
   e a ->
   e Int64 ->
   e Int64 ->
+  e Int64 ->
   m ()
-sample tape dtape hmc gen obs oldInternalPos oldUserPos mom eps trajLen samples = do
+sample hmc gen obs tape dtape oldInternalPos oldUserPos mom eps trajLen samples thin = do
   let n = flatSize $ Proxy @(f e a (Primal e a))
       fn = fieldNames @e @(f e a)
       hn = fieldNames @e @(h e a)
@@ -526,7 +532,7 @@ sample tape dtape hmc gen obs oldInternalPos oldUserPos mom eps trajLen samples 
       withString "energy\n" $ \header -> hputString fv' header
       pure fv'
   withGradTape @_ @m @e @_ @a tape dtape (evalMCLMC hmc obs) $ \_ _ grad -> do
-    rangeM (0 :: e Int64) samples $ \_ -> do
+    rangeM 0 (samples * thin) $ \traj -> do
       fillSphere mom (fromIntegral n)
       (pe0, _, x0) <- grad
       let x0' = primalize (x0 ^. parameters)
@@ -543,7 +549,7 @@ sample tape dtape hmc gen obs oldInternalPos oldUserPos mom eps trajLen samples 
         modifyRef delta $ \delta' -> delta' - dke'' + (pe'' - pe')
         writeRef pe pe''
         applyBounce nu mom n randn
-        whenM_ (step `eq` trajLen - 1) $ do
+        whenM_ (step `eq` trajLen - 1 `land` traj `remainder` thin `eq` 0) $ do
           u <- randf @_ @e @a >>= letM . log
           delta'' <- readRef delta
           let x' = primalize $ x ^. parameters
@@ -643,7 +649,7 @@ twoSampleGen x = do
 specializeModel :: Proxy a -> MCLMCModel m e f g a -> MCLMCModel m e f g a
 specializeModel _ x = x
 
-data MCLMCOptions a = MCLMCOptions { _mclmcEps :: a, _mclmcTuneSamples :: Int64, _mclmcSamples :: Int64 }
+data MCLMCOptions a = MCLMCOptions { _mclmcEps :: a, _mclmcTuneSamples :: Int64, _mclmcSamples :: Int64, _mclmcThin :: Int64 }
   deriving (Eq, Ord, Show)
 
 $(makeLenses ''MCLMCOptions)
@@ -651,12 +657,14 @@ $(makeLenses ''MCLMCOptions)
 runTwoSampleModel ::
   forall a.
   ( VM.Storable a,
+    Show a,
     Eq a,
     Floating a,
     Real a,
     JanusLitC a,
     JanusCTyped a,
     FFIArg a,
+    ExpBoolCast JanusC a,
     ExpFloatingCast JanusC CInt a,
     ExpFloatingCast JanusC Int64 a,
     ExpOrd JanusC a,
@@ -676,24 +684,22 @@ runTwoSampleModel opts x y = case someNatVal (toInteger $ VS.length x) of
           twoSampleModel' = specializeModel (Proxy @a) twoSampleModel
           tapesize = execState (runAD $ getHMC twoSampleModel') n
        in allocaBytes (tapesize * floatsize) $ \tape -> allocaBytes (tapesize * floatsize) $ \dtape ->
-        allocaBytes (n * floatsize) $ \newPos -> allocaBytes (n * floatsize) $ \newMom -> allocaBytes (n * floatsize) $ \mom -> do
+        allocaBytes (n * floatsize) $ \oldInternalPos -> allocaBytes (n * floatsize) $ \oldUserPos -> allocaBytes (n * floatsize) $ \mom -> do
             virvec <- VM.generate (fromIntegral $ opts ^. mclmcTuneSamples) (const 1)
             VM.unsafeWith virvec $ \vir ->
               withJanusC (\tape' dtape' x'' y'' -> tune @JanusCM @JanusC tape' dtape' twoSampleModel' $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
                 k tape dtape x' y' mom vir (opts ^. mclmcEps) (opts ^. mclmcTuneSamples)
-            virvec' <- VS.unsafeFreeze virvec
+            virvec' <- VS.freeze virvec
             case tuneNoiseLengthScale (VS.map realToFrac virvec') of
               Nothing -> error "Insufficient trajectory length for virial to decorrelate!"
-              Just len -> withJanusC (\tape' dtape' x'' y'' -> sample @JanusCM @JanusC tape' dtape' twoSampleModel' twoSampleGen (TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y''))) $ \k ->
-                print len >> k tape dtape x' y' newPos newMom mom (opts ^. mclmcEps) (fromIntegral len) (opts ^. mclmcSamples)
+              Just len -> withJanusC (\x'' y'' -> sample @JanusCM @JanusC twoSampleModel' twoSampleGen (TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y''))) $ \k ->
+                c_srand 0xdeadbeef >> print len >> k x' y' tape dtape oldInternalPos oldUserPos mom (opts ^. mclmcEps) (fromIntegral len) (opts ^. mclmcSamples) (opts ^. mclmcThin)
     Nothing -> error "VS.length returned a negative value!"
   Nothing -> error "VS.length returned a negative value!"
 
-men, women :: VS.Vector Double
+men, women :: VS.Vector Float
 men = VS.fromList [13.3, 6.0, 20.0, 8.0, 14.0, 19.0, 18.0, 25.0, 16.0, 24.0, 15.0, 1.0, 15.0]
 women = VS.fromList [22.0, 16.0, 21.7, 21.0, 30.0, 26.0, 12.0, 23.2, 28.0, 23.0]
--- men = VS.fromList [-1,1]
--- women = VS.fromList [-1,1]
 
 data PCGState m e = PCGState
   { pcgState :: Ref m e Word64,

@@ -22,6 +22,7 @@ import Control.Arrow
 import Control.Arrow.Transformer.State
 import Control.Category
 import Control.Lens
+import Data.Functor.Product
 import Data.Reflection
 import GHC.Float
 import GHC.Generics
@@ -79,8 +80,8 @@ updateLP = proc (hmc, theta, lp) -> do
       lp'' <- addA -< (lp, lp')
       returnA -< (theta, hmc & hmcLP ?~ lp'')
 
-normalD :: (Floating (e a)) => V3 (e a) -> e a
-normalD (V3 mu sigma2 x) = let y = x - mu in y * y / (2 * sigma2) + 0.5 * log (2 * pi * sigma2)
+normalD :: (Floating b) => Product V2 Identity b -> b
+normalD (Pair (V2 mu sigma2) (Identity x)) = let y = x - mu in y * y / (2 * sigma2) + 0.5 * log (2 * pi * sigma2)
 
 normal ::
   (CmdRAD m e a, Floating (ADExp e a), Floating a, Eq a, ExpInject e a) =>
@@ -88,7 +89,7 @@ normal ::
   MCLMC m e s a (Dual e a (Var e a), Dual e a (Var e a)) (Dual e a (Var e a))
 normal l = MCLMC $ proc ((mu, sigma2), hmc) -> do
   let theta = hmc ^. hmcState . l
-  lp <- opNAD normalD -< V3 mu sigma2 theta
+  lp <- opNAD normalD -< Pair (V2 mu sigma2) (Identity theta)
   updateLP -< (hmc, theta, lp)
 
 normal' ::
@@ -101,15 +102,23 @@ normal' l = MCLMC $ proc ((mu, sigma2), hmc) -> do
   z <- opNAD (\(V3 m s t) -> m + t * sqrt s) -< V3 mu sigma2 theta
   updateLP -< (hmc, z, lp)
 
+iid ::
+  forall m e a f n s.
+  (CmdRAD m e a, KnownNat n, ExpInject e a, Eq a, Floating a, Floating (ADExp e a), Traversable f, Applicative f) =>
+  (forall b. Floating b => Product f Identity b -> b) ->
+  Getting (Dual e a (Vector n e a)) s (Dual e a (Vector n e a)) ->
+  MCLMC m e s a (f (Dual e a (Vector n e a))) (Dual e a (Vector n e a))
+iid f l = MCLMC $ proc (params, hmc) -> do
+  let theta = hmc ^. hmcState . l
+  lp <- opNMapSum (runPartial . f . fmap (Dynamic @e)) (fmap runPartial . AD.grad f . fmap (Dynamic @e)) -< Pair params (Identity theta)
+  updateLP -< (hmc, theta, lp)
+
 iidNormal ::
   forall m e a n s.
   (CmdRAD m e a, KnownNat n, ExpInject e a, Eq a, Floating a, Floating (ADExp e a)) =>
   Getting (Dual e a (Vector n e a)) s (Dual e a (Vector n e a)) ->
   MCLMC m e s a (Dual e a (Var e a), Dual e a (Var e a)) (Dual e a (Vector n e a))
-iidNormal l = MCLMC $ proc ((mu, sigma2), hmc) -> do
-  let theta = hmc ^. hmcState . l
-  lp <- opNMapSum (runPartial . normalD . fmap (Dynamic @e)) (fmap runPartial . AD.grad normalD . fmap (Dynamic @e)) -< V3 (broadcast mu) (broadcast sigma2) theta
-  updateLP -< (hmc, theta, lp)
+iidNormal l = arr (\(mu,sigma2) -> V2 (broadcast mu) (broadcast sigma2)) >>> iid normalD l
 
 lognormal ::
   (CmdRAD m e a, Floating (ADExp e a), Floating a, Eq a, ExpInject e a) =>
@@ -117,7 +126,7 @@ lognormal ::
   MCLMC m e s a (Dual e a (Var e a), Dual e a (Var e a)) (Dual e a (Var e a))
 lognormal l = MCLMC $ proc ((mu, sigma2), hmc) -> do
   let theta = hmc ^. hmcState . l
-  lp <- opNAD normalD -< V3 mu sigma2 theta
+  lp <- opNAD normalD -< Pair (V2 mu sigma2) (Identity theta)
   phi <- expA -< theta
   updateLP -< (hmc, phi, lp)
 
@@ -127,7 +136,7 @@ lognormal' ::
   MCLMC m e s a (Dual e a (Var e a), Dual e a (Var e a)) (Dual e a (Var e a))
 lognormal' l = MCLMC $ proc ((mu, sigma2), hmc) -> do
   let theta = hmc ^. hmcState . l
-  lp <- opNAD normalD -< V3 (auto 0) (auto 1) theta
+  lp <- opNAD normalD -< Pair (V2 (auto 0) (auto 1)) (Identity theta)
   phi <- opNAD (\(V3 mu sigma2 t) -> exp $ mu + sqrt sigma2 * t) -< V3 mu sigma2 theta
   updateLP -< (hmc, phi, lp)
 
