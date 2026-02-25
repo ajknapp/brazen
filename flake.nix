@@ -2,7 +2,7 @@
   description = "Microcanonical Hamiltonian Monte Carlo on the GPU.";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     flake-utils.url = "github:numtide/flake-utils";
     janus.url = "git+ssh://git@github.com:/ajknapp/janus.git";
     janus.inputs.flake-utils.follows = "flake-utils";
@@ -60,7 +60,7 @@
                 arrows
                 blaze-html
                 clay
-                hkd
+                (jailbreakUnbreak hkd)
                 janus-pkg
                 lens
                 linear
