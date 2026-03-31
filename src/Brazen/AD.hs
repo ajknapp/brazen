@@ -420,6 +420,7 @@ unpackTangent tape dtape =
     ( \x y -> case (x, y) of
         (PrimalV x', PrimalV y') -> DVar (VDyn x' y')
         (PrimalT x', PrimalT y') -> DTensor x' y'
+        _ -> error "unpackTangent: the impossible happened"
     )
     (unpack tape)
     (unpack dtape)

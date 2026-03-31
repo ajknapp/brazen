@@ -56,6 +56,8 @@ instance Applicative (MCLMC m e s c a) where
     >>> second x
     >>> arr (\(f',(x',s)) -> (f' x', s))
 
+type MCLMCPrior m e f g a = MCLMC m e (Joint (f e a) (g e a) (Dual e a)) a () (f e a (Dual e a))
+type MCLMCLikelihood m e f g a = MCLMC m e (Joint (f e a) (g e a) (Dual e a)) a (f e a (Dual e a)) (g e a (Dual e a))
 type MCLMCModel m e f g a = MCLMC m e (Joint (f e a) (g e a) (Dual e a)) a () (Joint (f e a) (g e a) (Dual e a))
 
 opNAD ::

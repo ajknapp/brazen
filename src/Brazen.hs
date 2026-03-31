@@ -1,4 +1,5 @@
 {-# LANGUAGE Arrows #-}
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DefaultSignatures #-}
@@ -13,6 +14,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE StarIsType #-}
@@ -37,6 +39,7 @@ import Control.Monad.State
 import Data.Functor.Product
 import Data.HKD
 import Data.Int
+import Data.Kind
 import Data.Proxy
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Storable.Mutable as VM
@@ -201,7 +204,16 @@ openSampleFiles ::
 openSampleFiles = ftraverse $ \x -> withString (fieldName x <> ".csv") $ \fp ->
   withString "w" (fmap Const . fopen fp)
 
+-- | Specialization of 'ffor_' for better type inference with lambdas.
+ffor__ ::
+  forall {k} (t :: (k -> Type) -> Type) (m :: Type -> Type) (f :: k -> Type).
+  (FFoldable t, Applicative m) =>
+  t f -> (forall (a :: k). f a -> m ()) -> m ()
+ffor__ = ffor_
+{-# INLINE ffor__ #-}
+
 writeSampleHeaders ::
+  forall m e t.
   ( FZip t,
     FFoldable t,
     CmdCond m e,
@@ -219,33 +231,28 @@ writeSampleHeaders ::
   t (Const (e (Ptr CFile))) ->
   t (FieldName e) ->
   m ()
-writeSampleHeaders fps names = ftraverse_ writeSampleHeaders' (fzipWith Pair names fps)
-  where
-    writeSampleHeaders' ::
-      forall m e b.
-      (JanusTyped e Bool, JanusTyped e Int64, ExpOrd e Int64, CmdCond m e, CmdFormat m e Int64, CmdPutString m e, CmdRef m e, CmdWhile m e, Num (e Int64), ExpBool e, CmdRange m e) =>
-      Product (FieldName e) (Const (e (Ptr CFile))) b ->
-      m ()
-    writeSampleHeaders' (Pair (FieldVar str) (Const fp)) = withString (str <> "\n") $ hputString fp
-    writeSampleHeaders' (Pair (FieldTensor str sh) (Const fp)) = do
-      delim <- newRef @m @e true
-      withString str $ \str' -> withString "," $ \comma -> withString "_" $ \underscore ->
-        withString "\n" $ \newline -> do
-          iterateTensorBounds @m @e sh $ \idx -> do
-            delim' <- readRef delim
-            let writeIdx :: TensorIndex sh e -> m ()
-                writeIdx Z = pure ()
-                writeIdx (i :. ixs) = do
-                  hputString fp underscore
-                  hformat fp i ""
-                  writeIdx ixs
-            ifThenElseM_ delim' (hputString fp str' >> writeIdx idx >> writeRef delim false) $ do
-              hputString fp comma
-              hputString fp str'
-              writeIdx idx
-          hputString fp newline
+writeSampleHeaders fps names = ffor__ (fzipWith Pair names fps) \case
+  (Pair (FieldVar str) (Const fp)) -> withString (str <> "\n") $ hputString fp
+  (Pair (FieldTensor str sh) (Const fp)) -> do
+    delim <- newRef @m @e true
+    withString str $ \str' -> withString "," $ \comma -> withString "_" $ \underscore ->
+      withString "\n" $ \newline -> do
+        iterateTensorBounds @m @e sh $ \idx -> do
+          delim' <- readRef delim
+          let writeIdx :: TensorIndex sh e -> m ()
+              writeIdx Z = pure ()
+              writeIdx (i :. ixs) = do
+                hputString fp underscore
+                hformat fp i ""
+                writeIdx ixs
+          ifThenElseM_ delim' (hputString fp str' >> writeIdx idx >> writeRef delim false) $ do
+            hputString fp comma
+            hputString fp str'
+            writeIdx idx
+        hputString fp newline
 
 writeSamples ::
+  forall m e a t.
   ( FFoldable t,
     FZip t,
     Monad m,
@@ -264,35 +271,17 @@ writeSamples ::
   t (Const (e (Ptr CFile))) ->
   t (Primal e a) ->
   m ()
-writeSamples fps samples = ftraverse_ writeSamples' (fzipWith Pair fps samples)
-  where
-    writeSamples' ::
-      forall m e a b.
-      ( Monad m,
-        CmdFormat m e a,
-        CmdStorable m e a,
-        CmdCond m e,
-        CmdPutString m e,
-        CmdRange m e,
-        CmdRef m e,
-        ExpOrd e Int64,
-        Num (e Int64),
-        ExpBool e,
-        JanusTyped e Int64,
-        JanusTyped e Bool
-      ) =>
-      Product (Const (e (Ptr CFile))) (Primal e a) b ->
-      m ()
-    writeSamples' (Pair (Const fp) (PrimalC v)) = hformat fp v "\n"
-    writeSamples' (Pair (Const fp) (PrimalV v)) = peek v >>= \v' -> hformat fp v' "\n"
-    writeSamples' (Pair (Const fp) (PrimalT t)) = do
-      let Tensor bds _ = t
-      r <- newRef @m @e true
-      iterateTensorBounds bds $ \idx -> do
-        a <- readTensor t idx
-        r' <- readRef r
-        ifThenElseM_ r' (hformat fp a "" >> writeRef r false) (withString "," (hputString fp) >> hformat fp a "")
-      withString "\n" $ hputString fp
+writeSamples fps samples = ffor__ (fzipWith Pair fps samples) \case
+  (Pair (Const fp) (PrimalC v)) -> hformat fp v "\n"
+  (Pair (Const fp) (PrimalV v)) -> peek v >>= \v' -> hformat fp v' "\n"
+  (Pair (Const fp) (PrimalT t)) -> do
+    let Tensor bds _ = t
+    r <- newRef @m @e true
+    iterateTensorBounds bds $ \idx -> do
+      a <- readTensor t idx
+      r' <- readRef r
+      ifThenElseM_ r' (hformat fp a "" >> writeRef r false) (withString "," (hputString fp) >> hformat fp a "")
+    withString "\n" $ hputString fp
 
 closeSampleFiles :: (Applicative m, CmdIO m e, FFoldable f) => f (Const (e (Ptr CFile))) -> m ()
 closeSampleFiles = ftraverse_ (\(Const fp) -> fclose fp)
@@ -465,13 +454,11 @@ tune tape dtape hmc obs mom vir eps samples = do
       pokeElemOff vir v i
 
 pack :: (FFoldable (f e a), FZip (f e a), Monad m, JanusTyped e a, CmdStorable m e a) => f e a (Primal e a) -> f e a (Primal e a) -> m ()
-pack ffrom fto = ftraverse_ pack' (fzipWith Pair ffrom fto)
-  where
-    pack' :: (Monad m, JanusTyped e b, CmdStorable m e b) => Product (Primal e b) (Primal e b) c -> m ()
-    pack' (Pair (PrimalC vfrom) (PrimalV vto)) = poke vto vfrom
-    pack' (Pair (PrimalV vfrom) (PrimalV vto)) = peek vfrom >>= poke vto
-    pack' (Pair (PrimalT _) (PrimalT _)) = error "Brazen.pack: not implemented yet"
-    pack' (Pair _ (PrimalC _)) = error "Brazen.pack: the impossible happened"
+pack ffrom fto = ffor__ (fzipWith Pair ffrom fto) \case
+  (Pair (PrimalC vfrom) (PrimalV vto)) -> poke vto vfrom
+  (Pair (PrimalV vfrom) (PrimalV vto)) -> peek vfrom >>= poke vto
+  (Pair (PrimalT _) (PrimalT _)) -> error "Brazen.pack: not implemented yet"
+  (Pair _ (PrimalC _)) -> error "Brazen.pack: the impossible happened"
 
 -- assumes warm start from tune being called previously so tape and dtape have reasonable values
 sample ::
@@ -616,38 +603,58 @@ instance Flat (TwoSampleGen e a (Primal e a))
 
 instance FieldNames e (TwoSampleGen e a)
 
+twoSamplePrior ::
+  (CmdRAD m e a, ExpInject e a, Eq a, Floating (ADExp e a), Floating a) =>
+  Getting (Dual e a (Var e a)) s (TwoSamplePrior e a (Dual e a)) ->
+  MCLMC m e s a () (TwoSamplePrior e a (Dual e a))
+twoSamplePrior l = proc () -> do
+  _mu1 <- normal' (l . mu1) -< (auto 20, auto 10)
+  _mu2 <- normal' (l . mu2) -< (auto 20, auto 10)
+  _sigma21 <- halfCauchy (l . sigma21) -< auto 10
+  _sigma22 <- halfCauchy (l . sigma22) -< auto 10
+  returnA -< TwoSamplePrior {..}
+
+type GettingTensor e a s c = forall ns. (c -> Const (Dual e a (Tensor ns e a)) c) -> s -> Const (Dual e a (Tensor ns e a)) s
+
+twoSampleLikelihood ::
+  (CmdRAD m e a, ExpInject e a, Eq a, Floating (ADExp e a), Floating a, KnownNat n1, KnownNat n2) =>
+  GettingTensor e a s (TwoSampleLikelihood n1 n2 e a (Dual e a)) ->
+  MCLMC m e s a (TwoSamplePrior e a (Dual e a)) (TwoSampleLikelihood n1 n2 e a (Dual e a))
+twoSampleLikelihood l = proc prior -> do
+  _obsGroup1 <- iidNormal (l . obsGroup1) -< (prior ^. mu1, prior ^. sigma21)
+  _obsGroup2 <- iidNormal (l . obsGroup2) -< (prior ^. mu2, prior ^. sigma22)
+  returnA -< TwoSampleLikelihood {..}
+
+model :: MCLMCPrior m e f g a -> MCLMCLikelihood m e f g a -> MCLMCModel m e f g a
+model prior likelihood = prior >>> id &&& likelihood >>> arr (uncurry Joint)
+{-# INLINE model #-}
+
 twoSampleModel ::
   (CmdRAD m e a, ExpInject e a, Eq a, Floating (ADExp e a), Floating a, KnownNat n1, KnownNat n2) =>
   MCLMCModel m e TwoSamplePrior (TwoSampleLikelihood n1 n2) a
-twoSampleModel = proc _ -> do
-  s1 <- halfCauchy (parameters . sigma21) -< auto 10
-  s2 <- halfCauchy (parameters . sigma22) -< auto 10
-  m1 <- normal' (parameters . mu1) -< (auto 20, auto 10)
-  m2 <- normal' (parameters . mu2) -< (auto 20, auto 10)
-  x1 <- iidNormal (observations . obsGroup1) -< (m1, s1)
-  x2 <- iidNormal (observations . obsGroup2) -< (m2, s2)
-  returnA -< Joint (TwoSamplePrior m1 m2 s1 s2) (TwoSampleLikelihood x1 x2)
+twoSampleModel = model (twoSamplePrior parameters) (twoSampleLikelihood observations)
 
 twoSampleGen ::
   (CmdRAD m e a, Floating (e a)) =>
-  Joint (TwoSamplePrior e a) (TwoSampleLikelihood n1 n2 e a) (Primal e a) -> m (TwoSampleGen e a (Primal e a))
+  Joint (TwoSamplePrior e a) (TwoSampleLikelihood n1 n2 e a) (Primal e a) ->
+  m (TwoSampleGen e a (Primal e a))
 twoSampleGen x = do
-  let PrimalV m1 = x ^. parameters . mu1
-      PrimalV m2 = x ^. parameters . mu2
-      PrimalV s21 = x ^. parameters . sigma21
-      PrimalV s22 = x ^. parameters . sigma22
-  m1' <- peek m1
-  m2' <- peek m2
-  s21' <- peek s21
-  s1 <- letM $ sqrt s21'
-  s22' <- peek s22
-  s2 <- letM $ sqrt s22'
-  meanDiff <- letM $ m1' - m2'
-  effSize <- letM $ meanDiff / sqrt (0.5 * (s21' + s22'))
-  pure $ TwoSampleGen { _sigma1 = PrimalC s1, _sigma2 = PrimalC s2, _twoSampleMeanDiff = PrimalC meanDiff, _twoSampleEffectSize = PrimalC effSize }
+  m1 <- peekOrPure $ x ^. parameters . mu1
+  m2 <- peekOrPure $ x ^. parameters . mu2
+  s21 <- peekOrPure $ x ^. parameters . sigma21
+  s22 <- peekOrPure $ x ^. parameters . sigma22
+  s1 <- letM $ sqrt s21
+  s2 <- letM $ sqrt s22
+  meanDiff <- letM $ m1 - m2
+  effSize <- letM $ meanDiff / sqrt (0.5 * (s21 + s22))
+  pure $ TwoSampleGen {_sigma1 = PrimalC s1, _sigma2 = PrimalC s2, _twoSampleMeanDiff = PrimalC meanDiff, _twoSampleEffectSize = PrimalC effSize}
 
 specializeModel :: Proxy a -> MCLMCModel m e f g a -> MCLMCModel m e f g a
 specializeModel _ x = x
+
+peekOrPure :: (Applicative m, CmdStorable m e a) => Primal e a (Var e a) -> m (e a)
+peekOrPure (PrimalC a) = pure a
+peekOrPure (PrimalV v) = peek v
 
 data MCLMCOptions a = MCLMCOptions { _mclmcEps :: a, _mclmcTuneSamples :: Int64, _mclmcSamples :: Int64, _mclmcThin :: Int64 }
   deriving (Eq, Ord, Show)
