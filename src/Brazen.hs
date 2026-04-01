@@ -40,6 +40,7 @@ import Control.Monad.State
 import Data.Functor.Product
 import Data.HKD
 import Data.Int
+import Data.Monoid (Sum (..))
 import Data.Proxy
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Storable.Mutable as VM
@@ -195,18 +196,20 @@ runTwoSampleModel opts x y = case someNatVal (toInteger $ VS.length x) of
           n = flatSize $ Proxy @(TwoSamplePrior Identity a (Primal Identity a))
           floatsize = fromIntegral (runIdentity $ sizeOf (Proxy @a))
           twoSampleModel' = specializeModel (Proxy @a) twoSampleModel
-          tapesize = execState (runAD $ getHMC twoSampleModel') n
-       in allocaBytes (tapesize * floatsize) $ \tape -> allocaBytes (tapesize * floatsize) $ \dtape ->
+          tapestate = execState (runAD $ getHMC twoSampleModel') (RADState (Sum n) 0)
+          tapeSize = tapestate ^. radStateTapeSize . _Wrapped
+          scratchSize = tapestate ^. radStateScratchSize . _Wrapped
+       in allocaBytes (tapeSize * floatsize) $ \tape -> allocaBytes (tapeSize * floatsize) $ \dtape -> allocaBytes (scratchSize * floatsize) $ \stape ->
             allocaBytes (n * floatsize) $ \oldInternalPos -> allocaBytes (n * floatsize) $ \oldUserPos -> allocaBytes (n * floatsize) $ \mom -> do
               virvec <- VM.generate (fromIntegral $ opts ^. mclmcTuneSamples) (const 1)
               VM.unsafeWith virvec $ \vir ->
-                withJanusC (\tape' dtape' x'' y'' -> tune @JanusCM @JanusC tape' dtape' twoSampleModel' $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
-                  k tape dtape x' y' mom vir (opts ^. mclmcEps) (opts ^. mclmcTuneSamples)
+                withJanusC (\tape' dtape' stape' x'' y'' -> tune @JanusCM @JanusC tape' dtape' stape' twoSampleModel' $ TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y'')) $ \k ->
+                  k tape dtape stape x' y' mom vir (opts ^. mclmcEps) (opts ^. mclmcTuneSamples)
               virvec' <- VS.freeze virvec
               case tuneNoiseLengthScale (VS.map realToFrac virvec') of
                 Nothing -> error "Insufficient trajectory length for virial to decorrelate!"
                 Just len -> withJanusC (\x'' y'' -> sample @JanusCM @JanusC twoSampleModel' twoSampleGen (TwoSampleLikelihood (mkPTensor px x'') (mkPTensor py y''))) $ \k ->
-                  c_srand 0xdeadbeef >> print len >> k x' y' tape dtape oldInternalPos oldUserPos mom (opts ^. mclmcEps) (fromIntegral len) (opts ^. mclmcSamples) (opts ^. mclmcThin)
+                  c_srand 0xdeadbeef >> print len >> k x' y' tape dtape stape oldInternalPos oldUserPos mom (opts ^. mclmcEps) (fromIntegral len) (opts ^. mclmcSamples) (opts ^. mclmcThin)
     Nothing -> error "VS.length returned a negative value!"
   Nothing -> error "VS.length returned a negative value!"
 
@@ -322,18 +325,20 @@ runSP500 opts x = case someNatVal (toInteger $ VS.length x) of
         n = flatSize $ Proxy @(StochasticVolPrior Identity a (Primal Identity a))
         floatsize = fromIntegral (runIdentity $ sizeOf (Proxy @a))
         stochasticVolModel' = specializeModel (Proxy @a) stochasticVolModel
-        tapesize = execState (runAD $ getHMC stochasticVolModel') n
-     in allocaBytes (tapesize * floatsize) $ \tape -> allocaBytes (tapesize * floatsize) $ \dtape ->
+        tapestate = execState (runAD $ getHMC stochasticVolModel') (RADState (Sum n) 0)
+        tapeSize = tapestate ^. radStateTapeSize . _Wrapped
+        scratchSize = tapestate ^. radStateScratchSize . _Wrapped
+     in allocaBytes (tapeSize * floatsize) $ \tape -> allocaBytes (tapeSize * floatsize) $ \dtape -> allocaBytes (scratchSize * floatsize) $ \stape ->
           allocaBytes (n * floatsize) $ \oldInternalPos -> allocaBytes (n * floatsize) $ \oldUserPos -> allocaBytes (n * floatsize) $ \mom -> do
             virvec <- VM.generate (fromIntegral $ opts ^. mclmcTuneSamples) (const 1)
             VM.unsafeWith virvec $ \vir ->
-              withJanusC (\tape' dtape' x'' -> tune @JanusCM @JanusC tape' dtape' stochasticVolModel' $ StochasticVolLikelihood (mkPTensor px x'')) $ \k ->
-                k tape dtape x' mom vir (opts ^. mclmcEps) (opts ^. mclmcTuneSamples)
+              withJanusC (\tape' dtape' stape' x'' -> tune @JanusCM @JanusC tape' dtape' stape' stochasticVolModel' $ StochasticVolLikelihood (mkPTensor px x'')) $ \k ->
+                k tape dtape stape x' mom vir (opts ^. mclmcEps) (opts ^. mclmcTuneSamples)
             virvec' <- VS.freeze virvec
             case tuneNoiseLengthScale (VS.map realToFrac virvec') of
               Nothing -> error "Insufficient trajectory length for virial to decorrelate!"
               Just len -> withJanusC (\x'' -> sample @JanusCM @JanusC stochasticVolModel' stochasticVolGen (StochasticVolLikelihood (mkPTensor px x''))) $ \k ->
-                c_srand 0xdeadbeef >> print len >> k x' tape dtape oldInternalPos oldUserPos mom (opts ^. mclmcEps) (fromIntegral len) (opts ^. mclmcSamples) (opts ^. mclmcThin)
+                c_srand 0xdeadbeef >> print len >> k x' tape dtape stape oldInternalPos oldUserPos mom (opts ^. mclmcEps) (fromIntegral len) (opts ^. mclmcSamples) (opts ^. mclmcThin)
   Nothing -> error "VS.length returned a negative value!"
 
 data PCGState m e = PCGState

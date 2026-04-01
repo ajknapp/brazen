@@ -10,6 +10,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
@@ -25,18 +26,21 @@ import Control.Applicative
 import Control.Arrow
 import Control.Arrow.Transformer.Static
 import Control.Category
+import Control.Lens
 import Control.Monad.Codensity
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.Foldable
-import Data.Functor.Identity
 import Data.HKD
 import Data.Int
+import Data.Monoid (Sum (..))
 import Data.Proxy
+import Data.Semigroup (Max (..))
 import Data.Traversable
 import Foreign.Ptr hiding (nullPtr)
 import GHC.Float
-import GHC.Generics
+import GHC.Generics hiding (to)
+import qualified GHC.Generics as G
 import GHC.TypeLits
 import Janus.Command.Array
 import Janus.Command.Range
@@ -49,6 +53,11 @@ import Janus.Typed
 import Linear
 import Prelude hiding (id, (.))
 
+data Var e a where
+  VConst :: e a -> Var e a
+  VConst' :: e (Ptr a) -> Var e a
+  VDyn :: e (Ptr a) -> e (Ptr a) -> Var e a
+
 data Primal e a b where
   PrimalC :: e a -> Primal e a (Var e a)
   PrimalV :: e (Ptr a) -> Primal e a (Var e a)
@@ -60,17 +69,24 @@ data Dual e a b where
   DTConst :: Tensor sh e a -> Dual e a (Tensor sh e a)
   DTensor :: Tensor sh e a -> Tensor sh e a -> Dual e a (Tensor sh e a)
 
-data Tape e a = Tape {tapePrimal, tapeDual :: e (Ptr a)}
+data Tape e a = Tape {_tapePrimal, _tapeDual, _tapeScratch :: e (Ptr a)}
+
+makeLenses ''Tape
+
+data RADState = RADState {_radStateTapeSize :: Sum Int, _radStateScratchSize :: Max Int}
+  deriving (Eq, Show, Ord, Generic)
+
+makeLenses ''RADState
 
 newtype RAD m e c a b = RAD
-  { runAD :: State Int (Kleisli (ReaderT (Tape e c) (Codensity m)) a b)
+  { runAD :: State RADState (Kleisli (ReaderT (Tape e c) (Codensity m)) a b)
   }
   deriving
     (Functor, Applicative)
-    via StaticMonadArrow (State Int) (Kleisli (ReaderT (Tape e c) (Codensity m))) a
+    via StaticMonadArrow (State RADState) (Kleisli (ReaderT (Tape e c) (Codensity m))) a
   deriving
     (Category, Arrow, ArrowChoice)
-    via StaticMonadArrow (State Int) (Kleisli (ReaderT (Tape e c) (Codensity m)))
+    via StaticMonadArrow (State RADState) (Kleisli (ReaderT (Tape e c) (Codensity m)))
 
 instance (CmdRAD m e a) => ArrowNum (RAD m e a) (Dual e a (Var e a)) where
   addA = op2 (\x y -> (x + y, \dz -> (dz, dz)))
@@ -127,13 +143,8 @@ type CmdRAD m e a =
     CmdRef m e
   )
 
-adSize :: RAD m e c a b -> Int
-adSize (RAD f) = execState f 0
-
-data Var e a where
-  VConst :: e a -> Var e a
-  VConst' :: e (Ptr a) -> Var e a
-  VDyn :: e (Ptr a) -> e (Ptr a) -> Var e a
+adTapeSize :: RAD m e c a b -> Int
+adTapeSize (RAD f) = execState f (RADState 0 0) ^. radStateTapeSize . to getSum
 
 op1 ::
   forall m e a.
@@ -177,8 +188,8 @@ opN ::
   (f (ADExp e a) -> (ADExp e a, ADExp e a -> f (ADExp e a))) ->
   RAD m e a (f (Dual e a (Var e a))) (Dual e a (Var e a))
 opN f = RAD $ do
-  idx <- get
-  put (idx + 1)
+  idx <- use (radStateTapeSize . to getSum)
+  radStateTapeSize <>= 1
   pure $ Kleisli $ \xs -> do
     xs' <- for xs $ \case
       DVar (VConst a) -> pure . ADExp $ toShared a
@@ -208,8 +219,8 @@ opNMap ::
   RAD m e a (f (Dual e a (Vector n e a))) (Dual e a (Vector n e a))
 opNMap f df = RAD $ do
   let n = natVal (Proxy @n)
-  idx <- get
-  put (idx + fromIntegral n)
+  idx <- use (radStateTapeSize . to getSum)
+  radStateTapeSize <>= fromIntegral n
   pure $ Kleisli $ \xs -> do
     (y, dy) <- destinationVector idx
     lift $ shift $ \k -> lift $ do
@@ -243,8 +254,8 @@ opNMapSum ::
   RAD m e a (f (Dual e a (Vector n e a))) (Dual e a (Var e a))
 opNMapSum f df = RAD $ do
   let n = natVal (Proxy @n)
-  idx <- get
-  put (idx + 1)
+  idx <- use (radStateTapeSize . to getSum)
+  radStateTapeSize <>= 1
   pure $ Kleisli $ \xs -> do
     (y, dy) <- destination idx
     lift $ shift $ \k -> lift $ do
@@ -280,7 +291,7 @@ readDTensorPrimal (DTConst x) idx = readTensor x idx
 
 destination :: forall m e a. (CmdRAD m e a) => Int -> ReaderT (Tape e a) (Codensity m) (e (Ptr a), e (Ptr a))
 destination idx = do
-  Tape t dt <- ask
+  Tape t dt _scratch <- ask
   let inc = flip ptrIndex (fromIntegral idx)
       incM = lift . lift . letM . inc
   (,) <$> incM t <*> incM dt
@@ -351,15 +362,16 @@ withGradTape ::
   ) =>
   e (Ptr a) ->
   e (Ptr a) ->
+  e (Ptr a) ->
   RAD m e a (f e a (Dual e a)) (s, Dual e a (Var e a)) ->
   (Tape e a -> f e a (Primal e a) -> m (e a, f e a (Primal e a), s) -> m ()) ->
   m ()
-withGradTape tape dtape (RAD f) k = do
+withGradTape tape dtape stape (RAD f) k = do
   let m = flatSize (Proxy @(f e a (Primal e a)))
-      (f'', n) = runState f m
-      tape' = Tape tape dtape
+      (f'', n) = runState f (RADState (Sum m) 0)
+      tape' = Tape tape dtape stape
   k tape' (unpack tape) $ do
-    rangeM 0 (fromIntegral n) $ \i -> pokeElemOff dtape 0 i
+    rangeM 0 (fromIntegral $ n ^. radStateTapeSize . _Wrapped) $ \i -> pokeElemOff dtape 0 i
     (s, z) <- lowerCodensity $ reset $ do
       runReaderT (runKleisli f'' $ unpackTangent tape dtape) tape' >>= \case
         (s, DVar (VConst e)) -> pure (s, e)
@@ -383,17 +395,21 @@ withGrad ::
   m ()
 withGrad f k = do
   let m = flatSize (Proxy @(f e a (Primal e a)))
-      (_, n) = runState (runAD f) m
+      s = execState (runAD f) (RADState (Sum m) 0)
+      n = s ^. radStateTapeSize . _Wrapped
+      ns = s ^. radStateScratchSize . _Wrapped
   tape <- malloc ((fromIntegral n :: e Int64) * sizeOf (Proxy @a)) >>= letM . fromVoidPtr
   dtape <- malloc ((fromIntegral n :: e Int64) * sizeOf (Proxy @a)) >>= letM . fromVoidPtr
-  withGradTape tape dtape f k
+  stape <- malloc ((fromIntegral ns :: e Int64) * sizeOf (Proxy @a)) >>= letM . fromVoidPtr
+  withGradTape tape dtape stape f k
   free (toVoidPtr tape)
   free (toVoidPtr dtape)
+  free (toVoidPtr stape)
 
 class (Flat (f e a (Primal e a))) => Tangential f e a where
   unpack :: e (Ptr a) -> f e a (Primal e a)
   default unpack :: (Generic (f e a (Primal e a)), GTangential (Rep (f e a (Primal e a))) e a) => e (Ptr a) -> f e a (Primal e a)
-  unpack p = GHC.Generics.to $ gunpack p
+  unpack p = G.to $ gunpack p
 
 class GTangential f e a where
   gunpack :: e (Ptr a) -> f b
@@ -442,22 +458,3 @@ primalize =
         DTensor t _ -> PrimalT t
         _ -> error "primalize: the impossible happened"
     )
-
---------------------------------------------------------------------------------
-
-data DingoDango e a f = DingoDango {f1 :: f (Var e a), f2 :: f (Vector 6 e a)}
-  deriving (Generic)
-
-instance FFunctor (DingoDango e a) where ffmap = ffmapDefault
-
-instance FFoldable (DingoDango e a) where ffoldMap = ffoldMapDefault
-
-instance FTraversable (DingoDango e a) where ftraverse = gftraverse
-
-instance FZip (DingoDango e a) where fzipWith = gfzipWith
-
-instance FRepeat (DingoDango e a) where frepeat = gfrepeat
-
-instance Flat (DingoDango e a (Primal e a))
-
-instance (Num (e Int64), ExpSized e a, ExpPtr e a) => Tangential DingoDango e a

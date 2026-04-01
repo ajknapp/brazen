@@ -111,7 +111,7 @@ updateMomentum g u eps n = do
   rangeM 0 (fromIntegral n) $ \k -> do
     uk <- peekElemOff u k
     pokeElemOff u (uk / norm'') k
-  letM . (* fromIntegral (n-1)) $ delta - log 2 + log (1 + ue + (1 - ue) * zeta * zeta)
+  letM . (* fromIntegral (n - 1)) $ delta - log 2 + log (1 + ue + (1 - ue) * zeta * zeta)
 
 minimalNormStep ::
   ( JanusTyped e a,
@@ -169,7 +169,7 @@ leapfrogStep tape dtape mom n grad eps = do
   halfeps <- letM $ 0.5 * eps
   k1 <- updateMomentum dtape mom halfeps n
   updatePosition tape mom eps n
-  (pe,b,c) <- grad
+  (pe, b, c) <- grad
   k2 <- updateMomentum dtape mom halfeps n
   ke <- letM $ k1 + k2
   pure (ke, pe, b, c)
@@ -275,6 +275,7 @@ class (Fractional (e a), Monad m) => CmdRand m e a where
   randf :: m (e a)
 
 foreign import ccall "rand" c_rand :: IO CInt
+
 foreign import ccall "srand" c_srand :: CUInt -> IO ()
 
 instance (Fractional a) => CmdRand IO Identity a where
@@ -294,7 +295,7 @@ randn :: forall m e a. (JanusTyped e a, CmdRef m e, CmdRand m e a, Floating (e a
 randn = do
   u1 <- randf
   u2 <- randf
-  letM @_ @e $ sqrt (- (2 * log u1)) * cos (2 * pi * u2)
+  letM @_ @e $ sqrt (-(2 * log u1)) * cos (2 * pi * u2)
 
 virial ::
   ( JanusTyped e a,
@@ -412,6 +413,7 @@ tune ::
   ) =>
   e (Ptr a) ->
   e (Ptr a) ->
+  e (Ptr a) ->
   MCLMCModel m e f g a ->
   g e a (Primal e a) ->
   e (Ptr a) ->
@@ -419,9 +421,9 @@ tune ::
   e a ->
   e Int64 ->
   m ()
-tune tape dtape hmc obs mom vir eps samples = do
+tune tape dtape stape hmc obs mom vir eps samples = do
   let n = flatSize $ Proxy @(f e a (Primal e a))
-  withGradTape @_ @m @e @_ @a tape dtape (evalMCLMC hmc obs) $ \_ _ grad -> do
+  withGradTape @_ @m @e @_ @a tape dtape stape (evalMCLMC hmc obs) $ \_ _ grad -> do
     fillSphere mom (fromIntegral n)
     fillNormal tape (fromIntegral n)
     _ <- grad
@@ -471,12 +473,13 @@ sample ::
   e (Ptr a) ->
   e (Ptr a) ->
   e (Ptr a) ->
+  e (Ptr a) ->
   e a ->
   e Int64 ->
   e Int64 ->
   e Int64 ->
   m ()
-sample hmc gen obs tape dtape oldInternalPos oldUserPos mom eps trajLen samples thin = do
+sample hmc gen obs tape dtape stape oldInternalPos oldUserPos mom eps trajLen samples thin = do
   let n = flatSize $ Proxy @(f e a (Primal e a))
       fn = fieldNames @e @(f e a)
       hn = fieldNames @e @(h e a)
@@ -495,7 +498,7 @@ sample hmc gen obs tape dtape oldInternalPos oldUserPos mom eps trajLen samples 
       fv' <- fopen file mode
       withString "energy\n" $ \header -> hputString fv' header
       pure fv'
-  withGradTape @_ @m @e @_ @a tape dtape (evalMCLMC hmc obs) $ \_ _ grad -> do
+  withGradTape @_ @m @e @_ @a tape dtape stape (evalMCLMC hmc obs) $ \_ _ grad -> do
     rangeM 0 (samples * thin) $ \traj -> do
       fillSphere mom (fromIntegral n)
       (pe0, _, x0) <- grad
@@ -509,7 +512,7 @@ sample hmc gen obs tape dtape oldInternalPos oldUserPos mom eps trajLen samples 
       rangeM 0 trajLen $ \step -> do
         applyBounce nu mom n randn
         pe' <- readRef pe
-        (dke'',pe'', _, x) <- leapfrogStep tape dtape mom n grad eps
+        (dke'', pe'', _, x) <- leapfrogStep tape dtape mom n grad eps
         modifyRef delta $ \delta' -> delta' - dke'' + (pe'' - pe')
         writeRef pe pe''
         applyBounce nu mom n randn
