@@ -143,7 +143,7 @@ lognormal' l = MCLMC $ proc ((mu, sigma2), hmc) -> do
   updateLP -< (hmc, phi, lp)
 
 halfCauchyD :: (Floating a) => V2 a -> a
-halfCauchyD (V2 scale y) = log1p (exp (2*y)/scale) + 0.5*log scale - y + log (0.5*pi)
+halfCauchyD (V2 scale y) = -log1p (exp (2*y)/scale) - 0.5*log scale - y + log (2/pi)
 
 halfCauchy ::
   (CmdRAD m e a, Floating (ADExp e a), Eq a, Floating a, ExpInject e a) =>

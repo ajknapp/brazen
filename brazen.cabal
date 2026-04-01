@@ -76,6 +76,7 @@ library
                       Brazen.Partial
                       Brazen.Pairrow
                       Brazen.Shared
+                      Brazen.Sampler
                       Brazen.Tune
 
     -- Modules included in this library but not exported.
