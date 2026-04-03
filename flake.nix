@@ -38,8 +38,10 @@
           , clay
           , gnuplot_bin
           , hkd
+          , lapack-raw
           , lens
           , linear
+          , pkg-config
           , tasty
           , tasty-discover
           , tasty-hedgehog
@@ -69,7 +71,8 @@
                 vector
                 vector-fft
               ];
-            librarySystemDepends = [ boost gcc gcc.cc.lib cudaPackages.cudatoolkit cudaPackages.libnvjitlink gcc gnuplot_bin linuxPackages.nvidia_x11 ];
+            libraryPkgconfigDepends = [ lapack-raw ];
+            librarySystemDepends = [ boost gcc gcc.cc.lib cudaPackages.cudatoolkit cudaPackages.libnvjitlink gnuplot_bin linuxPackages.nvidia_x11 pkg-config ];
             testHaskellDepends = [ tasty tasty-discover tasty-hedgehog tasty-hunit ];
             description = "Microcanonical Hamiltonian Monte Carlo on the GPU.";
             license = "unknown";
@@ -79,6 +82,7 @@
         pkg = (haskellPackages.override {
           overrides = self: super: rec {
             gnuplot_bin = pkgs.gnuplot;
+            lapack-raw = pkgs.lapack;
           };
         }).callPackage derivation {};
 
@@ -98,7 +102,7 @@
           shellHook = ''
             export PATH=${pkgs.gcc}/bin:$PATH
             export CUDA_PATH=${pkgs.cudaPackages.cudatoolkit}
-            export LD_LIBRARY_PATH=${pkgs.linuxPackages.nvidia_x11}/lib:${pkgs.cudaPackages.libnvjitlink.lib}/lib
+            export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath pkg.env.buildInputs}:$LD_LIBRARY_PATH
             export EXTRA_LDFLAGS="-L${pkgs.linuxPackages.nvidia_x11}/lib"
             export EXTRA_CCFLAGS="-I/usr/include"
           '';
