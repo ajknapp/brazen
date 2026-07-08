@@ -282,6 +282,129 @@ opNMapSum f df = RAD $ do
           DTConst _ -> pure ()
       pure ans
 
+-- inverseQuadraticForm ::
+--   forall m e a n f.
+--   ( CmdRAD m e a
+--   , ExpShare e
+--   , MonadReader (Tape e a) m
+--   , Traversable f
+--   , Applicative f
+--   , KnownNat n
+--   , JanusTyped e Int64
+--   , Floating (e a)) =>
+--   (f (ADExp e a) -> f (ADExp e a) -> ADExp e a) ->
+--   (f (ADExp e a) -> f (ADExp e a) -> f (ADExp e a)) ->
+--   RAD m e a (f (Dual e a (Vector n e a)), Dual e a (Vector n e a)) (Dual e a (Var e a))
+-- inverseQuadraticForm f df = RAD $ do
+--   let n = natVal (Proxy @n)
+--   radStateScratchSize <>= Max (fromIntegral $ n*n)
+--   vecIdx <- use radStateTapeSize
+--   radStateTapeSize <>= Sum (fromIntegral n)
+--   ansIdx <- use radStateTapeSize
+--   radStateTapeSize <>= Sum 1
+--   pure $ Kleisli $ \(xs,y) -> do
+--     scratch <- use tapeScratch
+--     (z, _) <- destination (getSum vecIdx)
+--     (b, db) <- destination (getSum ansIdx)
+--     let pn = Proxy @n
+--         a = Tensor (TensorBoundCons pn (TensorBoundCons pn TensorBoundNil)) scratch
+--     lift $ shift $ \k -> lift $ do
+--       rangeM 0 (fromIntegral n) $ \i -> do
+--         xs' <- for xs $ \xsi -> ADExp . toShared <$> readDTensorPrimal xsi (i :. Z)
+--         rangeM 0 (i+1) $ \j -> do
+--           ys' <- for xs $ \xsj -> ADExp . toShared <$> readDTensorPrimal xsj (j :. Z)
+--           Identity aij <- shareM . Identity . getADExp $ f xs' ys'
+--           writeTensor a (i :. j :. Z) aij
+--       let extractVector :: Dual e a (Vector n e a) -> Vector n e a
+--           extractVector (DTensor x _) = x
+--           extractVector (DTConst x) = x
+--           extractVector (DTBroadcast _) = error "extractVector: not implemented yet"
+--       choleskySolve a (extractVector y) (Tensor (TensorBoundCons pn TensorBoundNil) z)
+--       poke b 0
+--       rangeM 0 (fromIntegral n) $ \i -> do
+--         yi <- readDTensorPrimal y (i :. Z)
+--         zi <- readTensor (Tensor (TensorBoundCons pn TensorBoundNil) z) (i :. Z)
+--         b' <- peek b
+--         poke b (b' + yi * zi)
+--       ans <- k (DVar (VDyn b db))
+--       dbVal <- peek db
+--       rangeM 0 (fromIntegral n) $ \i -> do
+--         zi <- readTensor (Tensor (TensorBoundCons pn TensorBoundNil) z) (i :. Z)
+--         case y of
+--           DTensor _ dy -> do
+--             dyi <- readTensor dy (i :. Z)
+--             writeTensor dy (i :. Z) (dyi + 2 * zi * dbVal)
+--           DTBroadcast (DVar (VDyn _ dy)) -> do
+--             dyVal <- peek dy
+--             poke dy (dyVal + 2 * zi * dbVal)
+--           _ -> pure ()
+--         xi <- for xs $ \xsi -> ADExp . toShared <$> readDTensorPrimal xsi (i :. Z)
+--         rangeM 0 (fromIntegral n) $ \j -> do
+--           zj <- readTensor (Tensor (TensorBoundCons pn TensorBoundNil) z) (j :. Z)
+--           xj <- for xs $ \xsj -> ADExp . toShared <$> readDTensorPrimal xsj (j :. Z)
+--           g <- shareM . fmap getADExp $ df xi xj
+--           for_ ((,) <$> xs <*> g) $ \(xsi_, gik) -> case xsi_ of
+--             DTensor _ dxsi -> do
+--               dxsiVal <- readTensor dxsi (i :. Z)
+--               writeTensor dxsi (i :. Z) (dxsiVal - 2 * zi * zj * dbVal * gik)
+--             DTBroadcast (DVar (VDyn _ dxsi)) -> do
+--               dxsiVal <- peek dxsi
+--               poke dxsi (dxsiVal - 2 * zi * zj * dbVal * gik)
+--             _ -> pure ()
+--       pure ans
+
+-- -- -- solve Ax = y by computing the Cholesky distribution in-place and then doing
+-- -- lower-triangular solves with x being stored in dest
+-- choleskySolve :: forall m e a n. (CmdRAD m e a, KnownNat n, Floating (e a)) => Matrix n n e a -> Vector n e a -> Vector n e a -> m ()
+-- choleskySolve a y dest = do undefined
+-- --   let n = fromIntegral (natVal (Proxy @n)) :: e Int64
+-- --   -- Cholesky decomposition A = L L^T in-place (lower triangle of a)
+-- --   rangeM 0 n $ \i -> do
+-- --     rangeM 0 i $ \j -> do
+-- --       s <- newRef 0
+-- --       rangeM 0 j $ \k -> do
+-- --         lik <- readTensor a (i :. k :. Z)
+-- --         ljk <- readTensor a (j :. k :. Z)
+-- --         modifyRef s (+ (lik * ljk))
+-- --       aij <- readTensor a (i :. j :. Z)
+-- --       ljj <- readTensor a (j :. j :. Z)
+-- --       sval <- readRef s
+-- --       lij <- letM $ (aij - sval) / ljj
+-- --       writeTensor a (i :. j :. Z) lij
+-- --     s <- newRef 0
+-- --     rangeM 0 i $ \k -> do
+-- --       lik <- readTensor a (i :. k :. Z)
+-- --       modifyRef s (+ (lik * lik))
+-- --     aii <- readTensor a (i :. i :. Z)
+-- --     sval <- readRef s
+-- --     lii <- letM $ sqrt (aii - sval)
+-- --     writeTensor a (i :. i :. Z) lii
+-- --   -- Forward substitution L w = y, store w in dest
+-- --   rangeM 0 n $ \i -> do
+-- --     s <- newRef 0
+-- --     rangeM 0 i $ \j -> do
+-- --       lij <- readTensor a (i :. j :. Z)
+-- --       wj <- readTensor dest (j :. Z)
+-- --       modifyRef s (+ (lij * wj))
+-- --     yi <- readTensor y (i :. Z)
+-- --     lii <- readTensor a (i :. i :. Z)
+-- --     sval <- readRef s
+-- --     wi <- letM $ (yi - sval) / lii
+-- --     writeTensor dest (i :. Z) wi
+-- --   -- Backward substitution L^T x = w, store x in dest
+-- --   rangeM 0 n $ \k -> do
+-- --     let i = n - 1 - k
+-- --     s <- newRef 0
+-- --     rangeM (i + 1) n $ \j -> do
+-- --       lji <- readTensor a (j :. i :. Z)
+-- --       xj <- readTensor dest (j :. Z)
+-- --       modifyRef s (+ (lji * xj))
+-- --     wi <- readTensor dest (i :. Z)
+-- --     lii <- readTensor a (i :. i :. Z)
+-- --     sval <- readRef s
+-- --     xi <- letM $ (wi - sval) / lii
+-- --     writeTensor dest (i :. Z) xi
+
 readDTensorPrimal :: (Applicative m, CmdStorable m e a, Num (e Int64)) => Dual e a (Tensor d e a) -> TensorIndex d e -> m (e a)
 readDTensorPrimal (DTensor x _) idx = readTensor x idx
 readDTensorPrimal (DTBroadcast (DVar (VConst x))) _ = pure x

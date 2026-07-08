@@ -64,6 +64,7 @@ library
     cxx-sources:      cbits/math.cpp
     cxx-options:      -O3 -march=native
     extra-libraries:  stdc++
+    pkgconfig-depends: lapack
 
     -- Modules exported by the library.
     exposed-modules:  Brazen
