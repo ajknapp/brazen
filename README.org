@@ -10,7 +10,7 @@ Some features of Brazen include:
 - Brazen includes its own implementation of imperative reverse-mode automatic differentiation, extending the [[https://hackage.haskell.org/package/ad][ad]] library to allow collective operations that only add a single node to the computation graph.
 - Brazen's AD is implemented using continuations, using the methodology described [[https://arxiv.org/abs/1803.10228][here]]. The continuations are present in the (Haskell) code generator, but are provably absent from the (C) generated code, which uses only loops. So, we have true zero-cost abstraction.
 - Brazen computations are specified using an Arrow that tracks memory usage. This allows all memory for the Brazen sampler to be allocated ahead of time, so Brazen models do not allocate during sampling.
-- Very basic HTML reporting capabilities are available using Gnuplot.
+- Very basic HTML reporting capabilities are available using Gnuplot. Since Brazen samples [[https://hackage.haskell.org/package/hkd][higher-kinded datatypes]], the reporting (implemented in Haskell) shares data definitions with the sampled datatypes (implemented in Janus).
 
 ** Future plans
 

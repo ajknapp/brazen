@@ -187,9 +187,10 @@ runTwoSampleModel opts x y = case someNatVal (toInteger $ VS.length x) of
     Nothing -> error "VS.length returned a negative value!"
   Nothing -> error "VS.length returned a negative value!"
 
-men, women :: VS.Vector Float
-men = VS.fromList [13.3, 6.0, 20.0, 8.0, 14.0, 19.0, 18.0, 25.0, 16.0, 24.0, 15.0, 1.0, 15.0]
-women = VS.fromList [22.0, 16.0, 21.7, 21.0, 30.0, 26.0, 12.0, 23.2, 28.0, 23.0]
+
+xdata, ydata :: VS.Vector Float
+xdata = VS.fromList [13.3, 6.0, 20.0, 8.0, 14.0, 19.0, 18.0, 25.0, 16.0, 24.0, 15.0, 1.0, 15.0]
+ydata = VS.fromList [22.0, 16.0, 21.7, 21.0, 30.0, 26.0, 12.0, 23.2, 28.0, 23.0]
 
 main :: IO ()
-main = runTwoSampleModel (MCLMCOptions 1e-2 8192 10000 5) men women
+main = runTwoSampleModel (MCLMCOptions 1e-2 8192 10000 5) xdata ydata
