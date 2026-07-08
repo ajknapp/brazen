@@ -121,6 +121,66 @@ library
     -- Base language which the package is written in.
     default-language: Haskell2010
 
+executable stochastic-vol
+    -- Import common warning flags.
+    import:           warnings
+
+    -- Base language which the package is written in.
+    default-language: Haskell2010
+
+    -- Modules included in this executable, other than Main.
+    -- other-modules:
+
+    -- LANGUAGE extensions used by modules in this package.
+    -- other-extensions:
+
+    -- Directories containing source files.
+    hs-source-dirs:   app/stochastic-vol/
+
+    -- The entrypoint to the test suite.
+    main-is:          Main.hs
+
+    -- Test dependencies.
+    build-depends:
+        base ^>=4.20,
+        brazen,
+        hkd,
+        janus,
+        lens,
+        linear,
+        mtl,
+        vector
+
+executable difference-of-means
+    -- Import common warning flags.
+    import:           warnings
+
+    -- Base language which the package is written in.
+    default-language: Haskell2010
+
+    -- Modules included in this executable, other than Main.
+    -- other-modules:
+
+    -- LANGUAGE extensions used by modules in this package.
+    -- other-extensions:
+
+    -- Directories containing source files.
+    hs-source-dirs:   app/difference-of-means/
+
+    -- The entrypoint to the test suite.
+    main-is:          Main.hs
+
+    -- Test dependencies.
+    build-depends:
+        base ^>=4.20,
+        brazen,
+        hkd,
+        janus,
+        lens,
+        linear,
+        mtl,
+        vector
+
 test-suite brazen-test
     -- Import common warning flags.
     import:           warnings

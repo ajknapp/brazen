@@ -1,0 +1,25 @@
+* Brazen - A Microcanonical Hamiltonian Monte Carlo Sampler
+
+Brazen is an implementation of [[https://arxiv.org/abs/2503.01707][Metropolis-adjusted Microcanonical Hamiltonian Monte Carlo]], a next-generation algorithm for sampling from the posterior of a Bayesian probabilistic model.
+These models can be conveniently specified in Brazen at a level of abstraction similar to the [[https://mc-stan.org/][STAN MCMC tool]].
+(See [[file:app/difference-of-means/Main.hs][here]] for an implementation of a simple two-sample mean model.)
+Some features of Brazen include:
+
+- Brazen models are implemented in [[http://github.com/ajknapp/janus][Janus]], which means they can be compiled to C for high performance, but debugged in GHCI. Brazen was written almost entirely in GHCI.
+- Brazen models will soon be able to be compiled to CUDA and run in an embarrassingly parallel fashion.
+- Brazen includes its own implementation of imperative reverse-mode automatic differentiation, extending the [[https://hackage.haskell.org/package/ad][ad]] library to allow collective operations that only add a single node to the computation graph.
+- Brazen's AD is implemented using continuations, using the methodology described [[https://arxiv.org/abs/1803.10228][here]]. The continuations are present in the (Haskell) code generator, but are provably absent from the (C) generated code, which uses only loops. So, we have true zero-cost abstraction.
+- Brazen computations are specified using an Arrow that tracks memory usage. This allows all memory for the Brazen sampler to be allocated ahead of time, and Brazen models are therefore allocation-free.
+- Very basic HTML reporting capabilities are available using Gnuplot.
+
+** Future plans
+
+The most critical additions are improved diagnostics and automatic hyperparameter tuning.
+After that, we plan generalize Brazen to allow for embarrassingly parallel sampling using CUDA.
+A nicer numerics API for implementing the sampler and AD primitives would be desirable, as would many more linear algebra and probabilistic AD primitives.
+It would also be nice to implement Stan-compatible output, so the excellent R tooling for MCMC diagnostics and visualization could be used.
+As a wishlist item, it would be nice to implement such things in Brazen directly, beyond the primitive HTML reporting that is present.
+
+** Stability
+
+Both Brazen and Janus are unstable, experimental moving targets.
